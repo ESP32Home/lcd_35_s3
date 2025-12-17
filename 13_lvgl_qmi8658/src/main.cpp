@@ -1,6 +1,7 @@
 /*Using LVGL with Arduino requires some extra steps:
  *Be sure to read the docs here: https://docs.lvgl.io/master/get-started/platforms/arduino.html  */
 
+#include <Arduino.h>
 #include <lvgl.h>
 
 /*To use the built-in examples and demos of LVGL uncomment the includes below respectively.
@@ -9,7 +10,7 @@
  as the examples and demos are now part of the main LVGL library. */
 
 // #include <examples/lv_examples.h>
-// #include <demos/lv_demos.h>
+#include <demos/lv_demos.h>
 
 // #define DIRECT_MODE // Uncomment to enable full frame buffer
 
@@ -270,7 +271,7 @@ void setup() {
   lvgl_qmi8658_ui_init(lv_scr_act());
 
   /* Option 3: Or try out a demo. Don't forget to enable the demos in lv_conf.h. E.g. LV_USE_DEMOS_WIDGETS*/
-  // lv_demo_widgets();
+  lv_demo_widgets();
   // lv_demo_benchmark();
   // lv_demo_keypad_encoder();
   // lv_demo_music();
