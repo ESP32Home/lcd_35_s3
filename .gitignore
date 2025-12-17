@@ -1,7 +1,7 @@
-.pio/
+.pio
 .pioenvs
 .piolibdeps
-.vscode/
+.vscode
 *.code-workspace
 __pycache__
 .DS_Store
