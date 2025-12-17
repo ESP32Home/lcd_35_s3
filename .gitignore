@@ -1,0 +1,8 @@
+.pio
+.pioenvs
+.piolibdeps
+.vscode
+*.code-workspace
+__pycache__
+.DS_Store
+
