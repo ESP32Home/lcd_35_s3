@@ -271,7 +271,7 @@ void setup() {
   lvgl_qmi8658_ui_init(lv_scr_act());
 
   /* Option 3: Or try out a demo. Don't forget to enable the demos in lv_conf.h. E.g. LV_USE_DEMOS_WIDGETS*/
-  lv_demo_widgets();
+  // lv_demo_widgets();
   // lv_demo_benchmark();
   // lv_demo_keypad_encoder();
   // lv_demo_music();
