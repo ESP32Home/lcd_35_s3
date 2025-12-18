@@ -10,7 +10,7 @@
  as the examples and demos are now part of the main LVGL library. */
 
 // #include <examples/lv_examples.h>
-#include <demos/lv_demos.h>
+//#include <demos/lv_demos.h>
 
 // #define DIRECT_MODE // Uncomment to enable full frame buffer
 
