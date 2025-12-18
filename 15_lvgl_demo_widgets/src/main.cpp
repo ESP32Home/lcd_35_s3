@@ -1,6 +1,7 @@
 /*Using LVGL with Arduino requires some extra steps:
  *Be sure to read the docs here: https://docs.lvgl.io/master/get-started/platforms/arduino.html  */
 
+#include <Arduino.h>
 #include <lvgl.h>
 #include <demos/lv_demos.h>
 
@@ -90,6 +91,7 @@ void setup() {
   TCA.begin();
   TCA.pinMode1(1, OUTPUT);
   lcd_reset();
+  Serial.println("Demo widgets example");
 
   if (!touch.begin(Wire, FT6X36_SLAVE_ADDRESS)) {
     Serial.println("Failed to find FT6X36 - check your wiring!");
@@ -97,7 +99,6 @@ void setup() {
       delay(1000);
     }
   }
-
   // Init Display
   if (!gfx->begin()) {
     Serial.println("gfx->begin() failed!");
@@ -118,15 +119,19 @@ void setup() {
   bufSize = screenWidth * 120;
 
   disp_draw_buf1 = (lv_color_t *)heap_caps_malloc(bufSize * 2, MALLOC_CAP_DEFAULT | MALLOC_CAP_8BIT);
+
   disp_draw_buf2 = (lv_color_t *)heap_caps_malloc(bufSize * 2, MALLOC_CAP_DEFAULT | MALLOC_CAP_8BIT);
+
   lv_disp_draw_buf_init(&draw_buf, disp_draw_buf1, disp_draw_buf2, bufSize);
 
   /* Initialize the display */
   lv_disp_drv_init(&disp_drv);
+  /* Change the following line to your display resolution */
   disp_drv.hor_res = screenWidth;
   disp_drv.ver_res = screenHeight;
   disp_drv.flush_cb = my_disp_flush;
   disp_drv.draw_buf = &draw_buf;
+
   lv_disp_drv_register(&disp_drv);
 
   /* Initialize input device driver */
