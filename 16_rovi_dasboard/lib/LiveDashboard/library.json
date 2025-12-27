@@ -1,0 +1,8 @@
+{
+  "name": "LiveDashboard",
+  "version": "0.1.0",
+  "description": "Rovi-neutral LVGL dashboard widgets (2x3 tile layout, gauges, splash helper).",
+  "frameworks": "arduino",
+  "platforms": "espressif32"
+}
+
