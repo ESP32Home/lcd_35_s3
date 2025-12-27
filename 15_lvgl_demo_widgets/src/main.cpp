@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 #include <lvgl.h>
-#include <demos/lv_demos.h>
+#include "demos/lv_demos.h"
 
 // #define DIRECT_MODE // Uncomment to enable full frame buffer
 
