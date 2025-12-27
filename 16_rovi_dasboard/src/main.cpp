@@ -8,6 +8,7 @@
 #include "TCA9554.h"
 #include "TouchDrvFT6X36.hpp"
 #include <stdio.h>
+#include <SD_MMC.h>
 
 #define GFX_BL 6
 
@@ -23,6 +24,10 @@
 
 #define I2C_SDA 8
 #define I2C_SCL 7
+
+static constexpr int kSdClk = 11;
+static constexpr int kSdCmd = 10;
+static constexpr int kSdD0 = 9;
 
 static constexpr int32_t kVoltageMinX10 = 100;
 static constexpr int32_t kVoltageMaxX10 = 130;
@@ -46,6 +51,69 @@ lv_disp_draw_buf_t draw_buf;
 lv_color_t *disp_draw_buf1;
 lv_color_t *disp_draw_buf2;
 lv_disp_drv_t disp_drv;
+
+extern void lv_fs_fatfs_init(void);
+
+static bool rovi_sd_init(void) {
+  if (!SD_MMC.setPins(kSdClk, kSdCmd, kSdD0)) {
+    Serial.println("SD_MMC.setPins failed, skipping splash");
+    return false;
+  }
+
+  if (!SD_MMC.begin("/sdcard", true)) {
+    Serial.println("SD_MMC.begin failed, skipping splash");
+    return false;
+  }
+
+  if (SD_MMC.cardType() == CARD_NONE) {
+    Serial.println("No SD card detected, skipping splash");
+    return false;
+  }
+
+  return true;
+}
+
+static void rovi_show_splash_from_sd(void) {
+  static const char *kSplashPath = "S:rovi.png";
+
+  lv_img_header_t hdr;
+  if (lv_img_decoder_get_info(kSplashPath, &hdr) != LV_RES_OK) {
+    Serial.printf("Splash image not found/decodable: %s\n", kSplashPath);
+    return;
+  }
+
+  lv_obj_t *scr = lv_scr_act();
+  lv_obj_clean(scr);
+  lv_obj_set_style_bg_color(scr, lv_color_hex(0x0B1220), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
+
+  lv_obj_t *img = lv_img_create(scr);
+  lv_img_set_src(img, kSplashPath);
+
+  bool rotate_90 = (hdr.w > hdr.h) && (screenHeight > screenWidth);
+  if (rotate_90) {
+    lv_img_set_pivot(img, hdr.w / 2, hdr.h / 2);
+    lv_img_set_angle(img, 900);
+  }
+
+  uint32_t disp_w = rotate_90 ? hdr.h : hdr.w;
+  uint32_t disp_h = rotate_90 ? hdr.w : hdr.h;
+  uint32_t zoom_w = (screenWidth * 256U) / disp_w;
+  uint32_t zoom_h = (screenHeight * 256U) / disp_h;
+  uint32_t zoom = (zoom_w < zoom_h) ? zoom_w : zoom_h;
+  if (zoom > 256U) {
+    zoom = 256U;
+  }
+  lv_img_set_zoom(img, zoom);
+
+  lv_obj_center(img);
+
+  uint32_t start = millis();
+  while (millis() - start < 3000) {
+    lv_timer_handler();
+    delay(10);
+  }
+}
 
 static void rovi_power_btn_event_cb(lv_event_t *e) {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
@@ -145,6 +213,7 @@ static void rovi_dashboard_create(void) {
   lv_disp_set_theme(lv_disp_get_default(), theme);
 
   lv_obj_t *scr = lv_scr_act();
+  lv_obj_clean(scr);
   lv_obj_set_style_bg_color(scr, lv_color_hex(0x0B1220), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
 
@@ -326,6 +395,8 @@ void setup() {
   digitalWrite(GFX_BL, HIGH);
 #endif
 
+  bool sd_ready = rovi_sd_init();
+
   lv_init();
 
   screenWidth = gfx->width();
@@ -349,6 +420,12 @@ void setup() {
   indev_drv.type = LV_INDEV_TYPE_POINTER;
   indev_drv.read_cb = my_touchpad_read;
   lv_indev_drv_register(&indev_drv);
+
+  lv_fs_fatfs_init();
+
+  if (sd_ready) {
+    rovi_show_splash_from_sd();
+  }
 
   rovi_dashboard_create();
 
