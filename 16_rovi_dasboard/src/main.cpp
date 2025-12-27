@@ -143,7 +143,7 @@ static void rovi_format_voltage(char *buf, size_t buf_size, int32_t voltage_x10)
     frac = -frac;
   }
 
-  snprintf(buf, buf_size, "%ld.%01ld V", static_cast<long>(whole), static_cast<long>(frac));
+  snprintf(buf, buf_size, "%ld.%01ldV", static_cast<long>(whole), static_cast<long>(frac));
 }
 
 static lv_obj_t *rovi_create_tile(lv_obj_t *parent) {
@@ -158,48 +158,59 @@ static lv_obj_t *rovi_create_tile(lv_obj_t *parent) {
   return tile;
 }
 
-static lv_obj_t *rovi_create_gauge_tile(lv_obj_t *parent,
-                                       const char *title,
-                                       int32_t min_value,
-                                       int32_t max_value,
-                                       int32_t value,
-                                       const char *value_text,
-                                       lv_color_t accent_color) {
+static lv_obj_t *rovi_create_arc_gauge_tile(lv_obj_t *parent,
+                                           const char *title,
+                                           int32_t min_value,
+                                           int32_t max_value,
+                                           int32_t value,
+                                           const char *value_text,
+                                           const char *min_label,
+                                           const char *max_label,
+                                           lv_color_t accent_color) {
   lv_obj_t *tile = rovi_create_tile(parent);
 
   lv_obj_t *title_label = lv_label_create(tile);
   lv_label_set_text(title_label, title);
   lv_obj_set_style_text_color(title_label, lv_color_hex(0xE2E8F0), LV_PART_MAIN);
-  lv_obj_set_style_text_font(title_label, &lv_font_montserrat_14, LV_PART_MAIN);
-  lv_obj_align(title_label, LV_ALIGN_TOP_MID, 0, 0);
+  lv_obj_set_style_text_font(title_label, &lv_font_montserrat_16, LV_PART_MAIN);
+  lv_obj_align(title_label, LV_ALIGN_TOP_LEFT, 0, 0);
 
-  lv_obj_t *meter = lv_meter_create(tile);
-  lv_obj_set_size(meter, 100, 100);
-  lv_obj_set_style_bg_opa(meter, LV_OPA_TRANSP, LV_PART_MAIN);
-  lv_obj_set_style_border_width(meter, 0, LV_PART_MAIN);
-  lv_obj_align(meter, LV_ALIGN_CENTER, 0, 0);
-
-  lv_meter_scale_t *scale = lv_meter_add_scale(meter);
-  lv_meter_set_scale_range(meter, scale, min_value, max_value, 270, 135);
-  lv_meter_set_scale_ticks(meter, scale, 21, 2, 10, lv_color_hex(0x475569));
-  lv_meter_set_scale_major_ticks(meter, scale, 4, 4, 15, lv_color_hex(0x94A3B8), 10);
-
-  lv_meter_indicator_t *arc_bg = lv_meter_add_arc(meter, scale, 8, lv_color_hex(0x334155), 0);
-  lv_meter_set_indicator_start_value(meter, arc_bg, min_value);
-  lv_meter_set_indicator_end_value(meter, arc_bg, max_value);
-
-  lv_meter_indicator_t *arc = lv_meter_add_arc(meter, scale, 8, accent_color, 0);
-  lv_meter_set_indicator_start_value(meter, arc, min_value);
-  lv_meter_set_indicator_end_value(meter, arc, value);
-
-  lv_meter_indicator_t *needle = lv_meter_add_needle_line(meter, scale, 4, lv_color_hex(0xE2E8F0), -10);
-  lv_meter_set_indicator_value(meter, needle, value);
+  lv_obj_t *arc = lv_arc_create(tile);
+  lv_obj_set_size(arc, 120, 120);
+  lv_arc_set_rotation(arc, 135);
+  lv_arc_set_bg_angles(arc, 0, 270);
+  lv_arc_set_range(arc, min_value, max_value);
+  lv_arc_set_value(arc, value);
+  lv_obj_set_style_arc_width(arc, 14, LV_PART_MAIN);
+  lv_obj_set_style_arc_width(arc, 14, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(arc, lv_color_hex(0x334155), LV_PART_MAIN);
+  lv_obj_set_style_arc_color(arc, accent_color, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
+  lv_obj_set_style_bg_opa(arc, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(arc, 0, LV_PART_MAIN);
+  lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
+  lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_align(arc, LV_ALIGN_CENTER, 0, 8);
 
   lv_obj_t *value_label = lv_label_create(tile);
   lv_label_set_text(value_label, value_text);
   lv_obj_set_style_text_color(value_label, lv_color_hex(0xE2E8F0), LV_PART_MAIN);
-  lv_obj_set_style_text_font(value_label, &lv_font_montserrat_16, LV_PART_MAIN);
-  lv_obj_align(value_label, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_set_style_text_font(value_label, &lv_font_montserrat_28, LV_PART_MAIN);
+  lv_obj_align_to(value_label, arc, LV_ALIGN_CENTER, 0, 6);
+
+  if (min_label != nullptr && max_label != nullptr) {
+    lv_obj_t *min_value_label = lv_label_create(tile);
+    lv_label_set_text(min_value_label, min_label);
+    lv_obj_set_style_text_color(min_value_label, lv_color_hex(0x94A3B8), LV_PART_MAIN);
+    lv_obj_set_style_text_font(min_value_label, &lv_font_montserrat_12, LV_PART_MAIN);
+    lv_obj_align(min_value_label, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+
+    lv_obj_t *max_value_label = lv_label_create(tile);
+    lv_label_set_text(max_value_label, max_label);
+    lv_obj_set_style_text_color(max_value_label, lv_color_hex(0x94A3B8), LV_PART_MAIN);
+    lv_obj_set_style_text_font(max_value_label, &lv_font_montserrat_12, LV_PART_MAIN);
+    lv_obj_align(max_value_label, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+  }
 
   return tile;
 }
@@ -239,14 +250,15 @@ static void rovi_dashboard_create(void) {
   rovi_format_voltage(voltage_buf, sizeof(voltage_buf), kVoltageValueX10);
 
   lv_obj_t *tile_voltage =
-    rovi_create_gauge_tile(grid, "Voltage", kVoltageMinX10, kVoltageMaxX10, kVoltageValueX10, voltage_buf,
-                           lv_palette_main(LV_PALETTE_GREEN));
+    rovi_create_arc_gauge_tile(grid, "Voltage", kVoltageMinX10, kVoltageMaxX10, kVoltageValueX10, voltage_buf, "10V",
+                               "13V", lv_palette_main(LV_PALETTE_GREEN));
   lv_obj_set_grid_cell(tile_voltage, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, 0, 1);
 
   char cpu_buf[16];
   snprintf(cpu_buf, sizeof(cpu_buf), "%ld%%", static_cast<long>(kCpuValue));
   lv_obj_t *tile_cpu =
-    rovi_create_gauge_tile(grid, "CPU", kCpuMin, kCpuMax, kCpuValue, cpu_buf, lv_palette_main(LV_PALETTE_AMBER));
+    rovi_create_arc_gauge_tile(grid, "CPU", kCpuMin, kCpuMax, kCpuValue, cpu_buf, "0%", "100%",
+                               lv_palette_main(LV_PALETTE_AMBER));
   lv_obj_set_grid_cell(tile_cpu, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, 0, 1);
 
   lv_obj_t *tile_shutdown = rovi_create_tile(grid);
