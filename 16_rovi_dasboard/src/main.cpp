@@ -193,10 +193,12 @@ static lv_obj_t *rovi_create_arc_gauge_tile(lv_obj_t *parent,
   lv_obj_align(arc, LV_ALIGN_CENTER, 0, 8);
 
   lv_obj_t *value_label = lv_label_create(tile);
-  lv_label_set_text(value_label, value_text);
   lv_obj_set_style_text_color(value_label, lv_color_hex(0xE2E8F0), LV_PART_MAIN);
   lv_obj_set_style_text_font(value_label, &lv_font_montserrat_28, LV_PART_MAIN);
-  lv_obj_align_to(value_label, arc, LV_ALIGN_CENTER, 0, 6);
+  lv_label_set_text(value_label, value_text);
+  lv_obj_set_width(value_label, LV_PCT(100));
+  lv_obj_set_style_text_align(value_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+  lv_obj_align(value_label, LV_ALIGN_CENTER, 0, 14);
 
   if (min_label != nullptr && max_label != nullptr) {
     lv_obj_t *min_value_label = lv_label_create(tile);
