@@ -29,7 +29,9 @@ static constexpr int kSdClk = 11;
 static constexpr int kSdCmd = 10;
 static constexpr int kSdD0 = 9;
 
-static constexpr int32_t kVoltageMinX10 = 100;
+static constexpr uint32_t kValueStaleTimeoutMs = 5000;
+
+static constexpr int32_t kVoltageMinX10 = 90;
 static constexpr int32_t kVoltageMaxX10 = 130;
 static constexpr int32_t kVoltageValueX10 = 121;
 
@@ -53,6 +55,181 @@ lv_color_t *disp_draw_buf2;
 lv_disp_drv_t disp_drv;
 
 extern void lv_fs_fatfs_init(void);
+
+static void rovi_format_voltage(char *buf, size_t buf_size, int32_t voltage_x10);
+
+struct RoviGaugeStage {
+  int32_t threshold;
+  lv_color_t color;
+};
+
+static lv_color_t rovi_pick_stage_color(int32_t value, const RoviGaugeStage *stages, size_t stage_count, lv_color_t fallback) {
+  if (stages == nullptr || stage_count == 0) {
+    return fallback;
+  }
+
+  for (size_t i = 0; i < stage_count; i++) {
+    if (value >= stages[i].threshold) {
+      return stages[i].color;
+    }
+  }
+
+  return stages[stage_count - 1].color;
+}
+
+static lv_obj_t *g_voltage_arc = nullptr;
+static lv_obj_t *g_voltage_value_label = nullptr;
+static lv_obj_t *g_cpu_arc = nullptr;
+static lv_obj_t *g_cpu_value_label = nullptr;
+
+static int32_t g_voltage_value_x10 = kVoltageValueX10;
+static uint32_t g_voltage_last_update_ms = 0;
+static bool g_voltage_has_value = false;
+static bool g_voltage_is_stale = true;
+static int32_t g_voltage_last_drawn_x10 = 0;
+
+static int32_t g_cpu_value = kCpuValue;
+static uint32_t g_cpu_last_update_ms = 0;
+static bool g_cpu_has_value = false;
+static bool g_cpu_is_stale = true;
+static int32_t g_cpu_last_drawn = 0;
+
+static const RoviGaugeStage kBatteryVoltageStages[] = {
+  {126, lv_palette_main(LV_PALETTE_GREEN)},  // Fully charged (max safe): 12.60V
+  {111, lv_palette_main(LV_PALETTE_GREEN)},  // Nominal / mid-charge: 11.10V
+  {110, lv_palette_main(LV_PALETTE_AMBER)},  // Recharge soon (~20% left): ~11.0V
+  {105, lv_palette_main(LV_PALETTE_ORANGE)}, // Low but safe: 10.50V
+  {90, lv_palette_main(LV_PALETTE_RED)},     // Critical: 9.00V
+};
+
+static void rovi_voltage_apply_stale(void) {
+  if (g_voltage_arc == nullptr || g_voltage_value_label == nullptr) {
+    return;
+  }
+
+  lv_arc_set_value(g_voltage_arc, kVoltageMinX10);
+  lv_obj_set_style_arc_color(g_voltage_arc, lv_color_hex(0x475569), LV_PART_INDICATOR);
+  lv_obj_set_style_text_color(g_voltage_value_label, lv_color_hex(0x94A3B8), LV_PART_MAIN);
+  lv_label_set_text(g_voltage_value_label, "--");
+}
+
+static void rovi_cpu_apply_stale(void) {
+  if (g_cpu_arc == nullptr || g_cpu_value_label == nullptr) {
+    return;
+  }
+
+  lv_arc_set_value(g_cpu_arc, kCpuMin);
+  lv_obj_set_style_arc_color(g_cpu_arc, lv_color_hex(0x475569), LV_PART_INDICATOR);
+  lv_obj_set_style_text_color(g_cpu_value_label, lv_color_hex(0x94A3B8), LV_PART_MAIN);
+  lv_label_set_text(g_cpu_value_label, "--");
+}
+
+static void rovi_voltage_apply_fresh(int32_t voltage_x10) {
+  if (g_voltage_arc == nullptr || g_voltage_value_label == nullptr) {
+    return;
+  }
+
+  if (voltage_x10 < kVoltageMinX10) {
+    voltage_x10 = kVoltageMinX10;
+  } else if (voltage_x10 > kVoltageMaxX10) {
+    voltage_x10 = kVoltageMaxX10;
+  }
+
+  lv_arc_set_value(g_voltage_arc, voltage_x10);
+  lv_color_t color = rovi_pick_stage_color(voltage_x10, kBatteryVoltageStages,
+                                           sizeof(kBatteryVoltageStages) / sizeof(kBatteryVoltageStages[0]),
+                                           lv_palette_main(LV_PALETTE_GREEN));
+  lv_obj_set_style_arc_color(g_voltage_arc, color, LV_PART_INDICATOR);
+  lv_obj_set_style_text_color(g_voltage_value_label, lv_color_hex(0xE2E8F0), LV_PART_MAIN);
+
+  char buf[16];
+  rovi_format_voltage(buf, sizeof(buf), voltage_x10);
+  lv_label_set_text(g_voltage_value_label, buf);
+}
+
+static void rovi_cpu_apply_fresh(int32_t cpu_percent) {
+  if (g_cpu_arc == nullptr || g_cpu_value_label == nullptr) {
+    return;
+  }
+
+  if (cpu_percent < kCpuMin) {
+    cpu_percent = kCpuMin;
+  } else if (cpu_percent > kCpuMax) {
+    cpu_percent = kCpuMax;
+  }
+
+  lv_arc_set_value(g_cpu_arc, cpu_percent);
+  lv_obj_set_style_arc_color(g_cpu_arc, lv_palette_main(LV_PALETTE_AMBER), LV_PART_INDICATOR);
+  lv_obj_set_style_text_color(g_cpu_value_label, lv_color_hex(0xE2E8F0), LV_PART_MAIN);
+
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%ld%%", static_cast<long>(cpu_percent));
+  lv_label_set_text(g_cpu_value_label, buf);
+}
+
+static void rovi_demo_timer_cb(lv_timer_t *) {
+  uint32_t now = millis();
+
+  static uint32_t last_voltage_publish_ms = 0;
+  static size_t voltage_idx = 0;
+  static const int32_t voltage_values_x10[] = {
+    126, // full
+    122, // good
+    111, // nominal
+    110, // recharge soon
+    106, // low
+    95,  // critical
+    120, // recovery
+  };
+
+  static uint32_t last_cpu_publish_ms = 0;
+  static size_t cpu_idx = 0;
+  static const int32_t cpu_values[] = {12, 37, 78, 5, 55};
+
+  if (now - last_voltage_publish_ms >= 1200) {
+    voltage_idx = (voltage_idx + 1) % (sizeof(voltage_values_x10) / sizeof(voltage_values_x10[0]));
+    g_voltage_value_x10 = voltage_values_x10[voltage_idx];
+    g_voltage_last_update_ms = now;
+    g_voltage_has_value = true;
+    last_voltage_publish_ms = now;
+  }
+
+  if (now - last_cpu_publish_ms >= 7000) {
+    cpu_idx = (cpu_idx + 1) % (sizeof(cpu_values) / sizeof(cpu_values[0]));
+    g_cpu_value = cpu_values[cpu_idx];
+    g_cpu_last_update_ms = now;
+    g_cpu_has_value = true;
+    last_cpu_publish_ms = now;
+  }
+
+  bool voltage_stale = !g_voltage_has_value || (now - g_voltage_last_update_ms > kValueStaleTimeoutMs);
+  if (voltage_stale) {
+    if (!g_voltage_is_stale) {
+      g_voltage_is_stale = true;
+      rovi_voltage_apply_stale();
+    }
+  } else {
+    if (g_voltage_is_stale || g_voltage_last_drawn_x10 != g_voltage_value_x10) {
+      g_voltage_is_stale = false;
+      g_voltage_last_drawn_x10 = g_voltage_value_x10;
+      rovi_voltage_apply_fresh(g_voltage_value_x10);
+    }
+  }
+
+  bool cpu_stale = !g_cpu_has_value || (now - g_cpu_last_update_ms > kValueStaleTimeoutMs);
+  if (cpu_stale) {
+    if (!g_cpu_is_stale) {
+      g_cpu_is_stale = true;
+      rovi_cpu_apply_stale();
+    }
+  } else {
+    if (g_cpu_is_stale || g_cpu_last_drawn != g_cpu_value) {
+      g_cpu_is_stale = false;
+      g_cpu_last_drawn = g_cpu_value;
+      rovi_cpu_apply_fresh(g_cpu_value);
+    }
+  }
+}
 
 static bool rovi_sd_init(void) {
   if (!SD_MMC.setPins(kSdClk, kSdCmd, kSdD0)) {
@@ -109,7 +286,7 @@ static void rovi_show_splash_from_sd(void) {
   lv_obj_center(img);
 
   uint32_t start = millis();
-  while (millis() - start < 3000) {
+  while (millis() - start < 5000) {
     lv_timer_handler();
     delay(10);
   }
@@ -166,7 +343,9 @@ static lv_obj_t *rovi_create_arc_gauge_tile(lv_obj_t *parent,
                                            const char *value_text,
                                            const char *min_label,
                                            const char *max_label,
-                                           lv_color_t accent_color) {
+                                           lv_color_t accent_color,
+                                           lv_obj_t **out_arc,
+                                           lv_obj_t **out_value_label) {
   lv_obj_t *tile = rovi_create_tile(parent);
 
   lv_obj_t *title_label = lv_label_create(tile);
@@ -200,6 +379,13 @@ static lv_obj_t *rovi_create_arc_gauge_tile(lv_obj_t *parent,
   lv_obj_set_style_text_align(value_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
   lv_obj_align(value_label, LV_ALIGN_CENTER, 0, 14);
 
+  if (out_arc != nullptr) {
+    *out_arc = arc;
+  }
+  if (out_value_label != nullptr) {
+    *out_value_label = value_label;
+  }
+
   if (min_label != nullptr && max_label != nullptr) {
     lv_obj_t *min_value_label = lv_label_create(tile);
     lv_label_set_text(min_value_label, min_label);
@@ -215,6 +401,23 @@ static lv_obj_t *rovi_create_arc_gauge_tile(lv_obj_t *parent,
   }
 
   return tile;
+}
+
+static lv_obj_t *rovi_create_multistage_arc_gauge_tile(lv_obj_t *parent,
+                                                      const char *title,
+                                                      int32_t min_value,
+                                                      int32_t max_value,
+                                                      int32_t value,
+                                                      const char *value_text,
+                                                      const char *min_label,
+                                                      const char *max_label,
+                                                      const RoviGaugeStage *stages,
+                                                      size_t stage_count,
+                                                      lv_obj_t **out_arc,
+                                                      lv_obj_t **out_value_label) {
+  lv_color_t color = rovi_pick_stage_color(value, stages, stage_count, lv_palette_main(LV_PALETTE_GREEN));
+  return rovi_create_arc_gauge_tile(parent, title, min_value, max_value, value, value_text, min_label, max_label, color, out_arc,
+                                   out_value_label);
 }
 
 static void rovi_dashboard_create(void) {
@@ -252,15 +455,17 @@ static void rovi_dashboard_create(void) {
   rovi_format_voltage(voltage_buf, sizeof(voltage_buf), kVoltageValueX10);
 
   lv_obj_t *tile_voltage =
-    rovi_create_arc_gauge_tile(grid, "Voltage", kVoltageMinX10, kVoltageMaxX10, kVoltageValueX10, voltage_buf, "10V",
-                               "13V", lv_palette_main(LV_PALETTE_GREEN));
+    rovi_create_multistage_arc_gauge_tile(grid, "Voltage", kVoltageMinX10, kVoltageMaxX10, kVoltageValueX10, voltage_buf, "9V",
+                                          "13V", kBatteryVoltageStages,
+                                          sizeof(kBatteryVoltageStages) / sizeof(kBatteryVoltageStages[0]), &g_voltage_arc,
+                                          &g_voltage_value_label);
   lv_obj_set_grid_cell(tile_voltage, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, 0, 1);
 
   char cpu_buf[16];
   snprintf(cpu_buf, sizeof(cpu_buf), "%ld%%", static_cast<long>(kCpuValue));
   lv_obj_t *tile_cpu =
     rovi_create_arc_gauge_tile(grid, "CPU", kCpuMin, kCpuMax, kCpuValue, cpu_buf, "0%", "100%",
-                               lv_palette_main(LV_PALETTE_AMBER));
+                               lv_palette_main(LV_PALETTE_AMBER), &g_cpu_arc, &g_cpu_value_label);
   lv_obj_set_grid_cell(tile_cpu, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, 0, 1);
 
   lv_obj_t *tile_shutdown = rovi_create_tile(grid);
@@ -312,13 +517,13 @@ static void rovi_dashboard_create(void) {
   lv_obj_align(lbl_rovi, LV_ALIGN_TOP_LEFT, 0, 0);
 
   lv_obj_t *lbl_demo = lv_label_create(tile_info);
-  lv_label_set_text(lbl_demo, "Dashboard (static demo)");
+  lv_label_set_text(lbl_demo, "Dashboard (demo timer)");
   lv_obj_set_style_text_color(lbl_demo, lv_color_hex(0x94A3B8), LV_PART_MAIN);
   lv_obj_set_style_text_font(lbl_demo, &lv_font_montserrat_14, LV_PART_MAIN);
   lv_obj_align_to(lbl_demo, lbl_rovi, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 6);
 
   lv_obj_t *lbl_hint = lv_label_create(tile_info);
-  lv_label_set_text(lbl_hint, "LVGL widgets only\nNo live ROS data yet");
+  lv_label_set_text(lbl_hint, "Demo timer updates\nNo live ROS data yet");
   lv_obj_set_style_text_color(lbl_hint, lv_color_hex(0x94A3B8), LV_PART_MAIN);
   lv_obj_set_style_text_font(lbl_hint, &lv_font_montserrat_12, LV_PART_MAIN);
   lv_obj_align(lbl_hint, LV_ALIGN_BOTTOM_LEFT, 0, 0);
@@ -342,6 +547,21 @@ static void rovi_dashboard_create(void) {
   lv_obj_set_style_text_color(lbl_note, lv_color_hex(0x94A3B8), LV_PART_MAIN);
   lv_obj_set_style_text_font(lbl_note, &lv_font_montserrat_12, LV_PART_MAIN);
   lv_obj_align(lbl_note, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+
+  uint32_t now = millis();
+  g_voltage_value_x10 = kVoltageValueX10;
+  g_voltage_last_update_ms = now;
+  g_voltage_has_value = true;
+  g_voltage_is_stale = false;
+  g_voltage_last_drawn_x10 = g_voltage_value_x10;
+
+  g_cpu_value = kCpuValue;
+  g_cpu_last_update_ms = now;
+  g_cpu_has_value = true;
+  g_cpu_is_stale = false;
+  g_cpu_last_drawn = g_cpu_value;
+
+  lv_timer_create(rovi_demo_timer_cb, 200, nullptr);
 }
 
 void my_disp_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *color_p) {
@@ -389,7 +609,7 @@ void setup() {
   TCA.begin();
   TCA.pinMode1(1, OUTPUT);
   lcd_reset();
-  Serial.println("ROVI dashboard (static) example");
+  Serial.println("ROVI dashboard (demo) example");
 
   if (!touch.begin(Wire, FT6X36_SLAVE_ADDRESS)) {
     Serial.println("Failed to find FT6X36 - check your wiring!");
