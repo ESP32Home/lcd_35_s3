@@ -4,7 +4,7 @@ Config-driven LVGL dashboard UI (grid tiles, gauges, buttons, splash) for ESP32/
 
 ## Quick start
 
-1. Put `config.json` (and any assets like `rovi.png`) into the same filesystem you pass to `begin()`.
+1. Put `config.json` (and any assets like `rovi.bmp`) into the same filesystem you pass to `begin()`.
 2. Create + init the dashboard:
 
 ```cpp
@@ -62,7 +62,7 @@ Top-level keys used by the library:
   - `stale_timeout_ms` (uint32, required) — if a gauge is older than this, it shows `--`
   - `background` (string, optional) — color like `"#0B1220"` or `"red"`/`"amber"`…
   - `splash` (object, optional)
-    - `path` (string) — image path in the FS; if no drive is included, it’s prefixed with the drive letter passed to `begin()` (e.g. `"F:/rovi.png"`)
+    - `path` (string) — image path in the FS; if no drive is included, it’s prefixed with the drive letter passed to `begin()` (e.g. `"F:/rovi.bmp"`)
     - `duration_ms` (uint32)
 - `layout` (object, required)
   - `cols` (uint8, required)

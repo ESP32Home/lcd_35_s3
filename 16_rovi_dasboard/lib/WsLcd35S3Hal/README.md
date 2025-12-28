@@ -47,7 +47,7 @@ void loop() {
 
 After `begin()`, LVGL can load assets from internal FFat using paths like:
 
-- `F:/rovi.png`
+- `F:/rovi.bmp`
 
 This is how the dashboard splash image is loaded (PNG decoder must be enabled in your `lv_conf.h`).
 
@@ -61,4 +61,3 @@ This sample uses a FATFS partition (`FFat`) configured by:
 Upload filesystem content with:
 
 - `pio run -e esp32-s3-touch-lcd-35 -t uploadfs`
-

@@ -12,7 +12,7 @@ Simple LVGL dashboard demo for a robot (ROVI), targeting the 3.5" 320×480 ESP32
   - Pipeline Hz list (spans 2 tiles via repeated tile id)
   - Shutdown / Restart buttons (serial callbacks)
 - Fail‑safe display: if a value is older than `ui.stale_timeout_ms` it shows `--`
-- Splash screen (PNG) loaded from internal flash FS (FFat) before showing the dashboard
+- Splash screen (BMP) loaded from internal flash FS (FFat) before showing the dashboard
 
 ## Local library
 
@@ -24,7 +24,7 @@ This sample uses two local PlatformIO libraries:
 - `lib/LiveDashboard/` (UI)
   - Loads `/config.json` from internal FFat
   - Builds the tile grid + widgets from config
-  - Shows splash from internal FFat (e.g. `F:/rovi.png`)
+  - Shows splash from internal FFat (e.g. `F:/rovi.bmp`)
 
 `src/main.cpp` stays minimal:
 
@@ -34,7 +34,7 @@ This sample uses two local PlatformIO libraries:
 
 ## Internal config (FFat)
 
-- `data/config.json` and `data/rovi.png` are built into the internal flash FATFS partition (`ffat` in `partitions/partitions_16MB_3MBapp_9_9MB_fatfs.csv`).
+- `data/config.json` and `data/rovi.bmp` are built into the internal flash FATFS partition (`ffat` in `partitions/partitions_16MB_3MBapp_9_9MB_fatfs.csv`).
 - `/config.json` is required: if it’s missing or invalid the firmware prints a fatal message and shows a “CONFIG ERROR” screen.
 
 Upload the filesystem image:
