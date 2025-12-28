@@ -296,13 +296,30 @@ bool WsLcd35S3Hal::begin() {
     }
   }
 
-  const uint32_t buf_pixels = static_cast<uint32_t>(screen_width_) * 120U;
-  const uint32_t buf_bytes = buf_pixels * sizeof(lv_color_t);
   const uint32_t caps = (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
 
-  g_disp_draw_buf1 = static_cast<lv_color_t *>(heap_caps_malloc(buf_bytes, caps));
-  g_disp_draw_buf2 = static_cast<lv_color_t *>(heap_caps_malloc(buf_bytes, caps));
-  if (g_disp_draw_buf1 == nullptr || g_disp_draw_buf2 == nullptr) {
+  uint32_t buf_lines = 0;
+  bool double_buffered = false;
+  for (uint32_t try_lines : {480U, 440U, 400U, 360U, 320U, 300U, 280U, 260U, 240U, 200U, 160U, 120U, 100U, 80U, 60U, 40U}) {
+    if (try_lines > screen_height_) continue;
+
+    const uint32_t try_pixels = static_cast<uint32_t>(screen_width_) * try_lines;
+    const uint32_t try_bytes = try_pixels * sizeof(lv_color_t);
+
+    lv_color_t *buf1 = static_cast<lv_color_t *>(heap_caps_malloc(try_bytes, caps));
+    if (buf1 == nullptr) {
+      continue;
+    }
+    lv_color_t *buf2 = static_cast<lv_color_t *>(heap_caps_malloc(try_bytes, caps));
+
+    g_disp_draw_buf1 = buf1;
+    g_disp_draw_buf2 = buf2; // may be null => single buffering
+    buf_lines = try_lines;
+    double_buffered = (buf2 != nullptr);
+    break;
+  }
+
+  if (g_disp_draw_buf1 == nullptr) {
     Serial.println("FATAL: LVGL draw buffers alloc failed");
     return false;
   }
@@ -316,7 +333,9 @@ bool WsLcd35S3Hal::begin() {
   };
   log_buf("buf1", g_disp_draw_buf1);
   log_buf("buf2", g_disp_draw_buf2);
-  Serial.printf("DRAW_BUF caps: %s\n", (caps & MALLOC_CAP_SPIRAM) ? "SPIRAM" : "INTERNAL|DMA");
+  Serial.printf("DRAW_BUF caps: INTERNAL|DMA\n");
+  Serial.printf("DRAW_BUF lines=%u mode=%s\n", static_cast<unsigned>(buf_lines), double_buffered ? "double" : "single");
+  const uint32_t buf_pixels = static_cast<uint32_t>(screen_width_) * buf_lines;
   lv_disp_draw_buf_init(&g_draw_buf, g_disp_draw_buf1, g_disp_draw_buf2, buf_pixels);
 
   lv_disp_drv_init(&g_disp_drv);
