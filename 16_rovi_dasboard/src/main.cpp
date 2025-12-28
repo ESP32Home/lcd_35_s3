@@ -6,13 +6,14 @@
 
 #include <LiveDashboard.h>
 
+#include <ArduinoJson.h>
 #include <Arduino_GFX_Library.h>
 #include "TCA9554.h"
 #include "TouchDrvFT6X36.hpp"
 #include <FFat.h>
-#include <ctype.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <SD_MMC.h>
 
 #define GFX_BL 6
@@ -46,7 +47,7 @@ static constexpr int32_t kCpuValue = 37;
 
 static constexpr uint32_t kSplashDurationMs = 3000;
 static const char *kSplashLvglPath = "S:rovi.png";
-static const char *kConfigPath = "/config.yaml";
+static const char *kConfigPath = "/config.json";
 
 TCA9554 TCA(0x20);
 
@@ -67,98 +68,344 @@ extern void lv_fs_fatfs_init(void);
 
 static void rovi_format_voltage(char *buf, size_t buf_size, int32_t voltage_x10);
 
-static const live_dashboard::Stage kBatteryVoltageStages[] = {
-  {126, lv_palette_main(LV_PALETTE_GREEN)},  // Fully charged (max safe): 12.60V
-  {111, lv_palette_main(LV_PALETTE_GREEN)},  // Nominal / mid-charge: 11.10V
-  {110, lv_palette_main(LV_PALETTE_AMBER)},  // Recharge soon (~20% left): ~11.0V
-  {105, lv_palette_main(LV_PALETTE_ORANGE)}, // Low but safe: 10.50V
-  {90, lv_palette_main(LV_PALETTE_RED)},     // Critical: 9.00V
-};
-
 static live_dashboard::LiveDashboard g_dashboard;
 
-static void rovi_trim_inplace(char *s) {
-  if (s == nullptr) {
+struct RoviConfig {
+  static constexpr size_t kMaxStages = 8;
+
+  char robot_name[32]{};
+  bool dark_theme = true;
+  uint32_t stale_timeout_ms = kValueStaleTimeoutMs;
+
+  char splash_path[64]{};
+  uint32_t splash_duration_ms = kSplashDurationMs;
+
+  int32_t voltage_min_x10 = kVoltageMinX10;
+  int32_t voltage_max_x10 = kVoltageMaxX10;
+  int32_t voltage_initial_x10 = kVoltageValueX10;
+  char voltage_min_label[16]{};
+  char voltage_max_label[16]{};
+  live_dashboard::Stage voltage_stages[kMaxStages]{};
+  size_t voltage_stage_count = 0;
+
+  int32_t cpu_min = kCpuMin;
+  int32_t cpu_max = kCpuMax;
+  int32_t cpu_initial = kCpuValue;
+  char cpu_min_label[16]{};
+  char cpu_max_label[16]{};
+  lv_color_t cpu_accent = lv_palette_main(LV_PALETTE_AMBER);
+};
+
+static RoviConfig g_config;
+
+static void rovi_copy_cstr(char *dst, size_t dst_size, const char *src) {
+  if (dst == nullptr || dst_size == 0) {
+    return;
+  }
+  if (src == nullptr) {
+    dst[0] = '\0';
+    return;
+  }
+  snprintf(dst, dst_size, "%s", src);
+}
+
+static int rovi_stricmp(const char *a, const char *b) {
+  if (a == nullptr && b == nullptr) {
+    return 0;
+  }
+  if (a == nullptr) {
+    return -1;
+  }
+  if (b == nullptr) {
+    return 1;
+  }
+  while (*a != '\0' && *b != '\0') {
+    char ca = *a;
+    char cb = *b;
+    if (ca >= 'A' && ca <= 'Z') {
+      ca = static_cast<char>(ca - 'A' + 'a');
+    }
+    if (cb >= 'A' && cb <= 'Z') {
+      cb = static_cast<char>(cb - 'A' + 'a');
+    }
+    if (ca != cb) {
+      return static_cast<unsigned char>(ca) - static_cast<unsigned char>(cb);
+    }
+    a++;
+    b++;
+  }
+  return static_cast<unsigned char>(*a) - static_cast<unsigned char>(*b);
+}
+
+static bool rovi_parse_lv_color(const char *value, lv_color_t *out) {
+  if (value == nullptr || out == nullptr) {
+    return false;
+  }
+
+  if (value[0] == '#') {
+    char *end = nullptr;
+    uint32_t rgb = strtoul(value + 1, &end, 16);
+    if (end == value + 1) {
+      return false;
+    }
+    *out = lv_color_hex(rgb);
+    return true;
+  }
+
+  if ((value[0] == '0') && (value[1] == 'x' || value[1] == 'X')) {
+    char *end = nullptr;
+    uint32_t rgb = strtoul(value + 2, &end, 16);
+    if (end == value + 2) {
+      return false;
+    }
+    *out = lv_color_hex(rgb);
+    return true;
+  }
+
+  if (rovi_stricmp(value, "green") == 0) {
+    *out = lv_palette_main(LV_PALETTE_GREEN);
+    return true;
+  }
+  if (rovi_stricmp(value, "amber") == 0) {
+    *out = lv_palette_main(LV_PALETTE_AMBER);
+    return true;
+  }
+  if (rovi_stricmp(value, "orange") == 0) {
+    *out = lv_palette_main(LV_PALETTE_ORANGE);
+    return true;
+  }
+  if (rovi_stricmp(value, "red") == 0) {
+    *out = lv_palette_main(LV_PALETTE_RED);
+    return true;
+  }
+  if (rovi_stricmp(value, "blue") == 0) {
+    *out = lv_palette_main(LV_PALETTE_BLUE);
+    return true;
+  }
+  if (rovi_stricmp(value, "cyan") == 0) {
+    *out = lv_palette_main(LV_PALETTE_CYAN);
+    return true;
+  }
+  if (rovi_stricmp(value, "purple") == 0) {
+    *out = lv_palette_main(LV_PALETTE_PURPLE);
+    return true;
+  }
+  if (rovi_stricmp(value, "teal") == 0) {
+    *out = lv_palette_main(LV_PALETTE_TEAL);
+    return true;
+  }
+  if (rovi_stricmp(value, "yellow") == 0) {
+    *out = lv_palette_main(LV_PALETTE_YELLOW);
+    return true;
+  }
+  if (rovi_stricmp(value, "grey") == 0 || rovi_stricmp(value, "gray") == 0) {
+    *out = lv_palette_main(LV_PALETTE_GREY);
+    return true;
+  }
+  if (rovi_stricmp(value, "white") == 0) {
+    *out = lv_color_white();
+    return true;
+  }
+
+  return false;
+}
+
+static void rovi_config_set_defaults(RoviConfig &cfg) {
+  rovi_copy_cstr(cfg.robot_name, sizeof(cfg.robot_name), "ROVI");
+  cfg.dark_theme = true;
+  cfg.stale_timeout_ms = kValueStaleTimeoutMs;
+
+  rovi_copy_cstr(cfg.splash_path, sizeof(cfg.splash_path), kSplashLvglPath);
+  cfg.splash_duration_ms = kSplashDurationMs;
+
+  cfg.voltage_min_x10 = kVoltageMinX10;
+  cfg.voltage_max_x10 = kVoltageMaxX10;
+  cfg.voltage_initial_x10 = kVoltageValueX10;
+  rovi_copy_cstr(cfg.voltage_min_label, sizeof(cfg.voltage_min_label), "9V");
+  rovi_copy_cstr(cfg.voltage_max_label, sizeof(cfg.voltage_max_label), "13V");
+
+  cfg.voltage_stage_count = 5;
+  cfg.voltage_stages[0] = {126, lv_palette_main(LV_PALETTE_GREEN)};
+  cfg.voltage_stages[1] = {111, lv_palette_main(LV_PALETTE_GREEN)};
+  cfg.voltage_stages[2] = {110, lv_palette_main(LV_PALETTE_AMBER)};
+  cfg.voltage_stages[3] = {105, lv_palette_main(LV_PALETTE_ORANGE)};
+  cfg.voltage_stages[4] = {90, lv_palette_main(LV_PALETTE_RED)};
+
+  cfg.cpu_min = kCpuMin;
+  cfg.cpu_max = kCpuMax;
+  cfg.cpu_initial = kCpuValue;
+  rovi_copy_cstr(cfg.cpu_min_label, sizeof(cfg.cpu_min_label), "0%");
+  rovi_copy_cstr(cfg.cpu_max_label, sizeof(cfg.cpu_max_label), "100%");
+  cfg.cpu_accent = lv_palette_main(LV_PALETTE_AMBER);
+}
+
+static void rovi_sort_stages_desc(live_dashboard::Stage *stages, size_t stage_count) {
+  if (stages == nullptr || stage_count < 2) {
     return;
   }
 
-  char *start = s;
-  while (*start != '\0' && isspace(static_cast<unsigned char>(*start))) {
-    start++;
-  }
-
-  if (start != s) {
-    size_t len = strlen(start);
-    memmove(s, start, len + 1);
-  }
-
-  size_t len = strlen(s);
-  while (len > 0 && isspace(static_cast<unsigned char>(s[len - 1]))) {
-    s[len - 1] = '\0';
-    len--;
+  for (size_t i = 0; i < stage_count; i++) {
+    for (size_t j = 0; j + 1 < stage_count; j++) {
+      if (stages[j].threshold < stages[j + 1].threshold) {
+        live_dashboard::Stage tmp = stages[j];
+        stages[j] = stages[j + 1];
+        stages[j + 1] = tmp;
+      }
+    }
   }
 }
 
-static bool rovi_read_yaml_value(const char *path, const char *key, char *out_value, size_t out_value_size) {
-  if (path == nullptr || key == nullptr || out_value == nullptr || out_value_size == 0) {
+static bool rovi_config_load_from_ffat(RoviConfig &cfg, const char *path) {
+  if (path == nullptr) {
     return false;
   }
 
   File f = FFat.open(path, "r");
   if (!f) {
+    Serial.printf("Config not found: %s\n", path);
     return false;
   }
 
-  char line[128];
-  while (f.available()) {
-    size_t n = f.readBytesUntil('\n', line, sizeof(line) - 1);
-    line[n] = '\0';
-    if (n > 0 && line[n - 1] == '\r') {
-      line[n - 1] = '\0';
-    }
+  DynamicJsonDocument doc(4096);
+  DeserializationError err = deserializeJson(doc, f);
+  if (err) {
+    Serial.printf("Config JSON parse error: %s\n", err.c_str());
+    return false;
+  }
 
-    rovi_trim_inplace(line);
-    if (line[0] == '\0' || line[0] == '#') {
-      continue;
-    }
+  JsonObject root = doc.as<JsonObject>();
 
-    char *hash = strchr(line, '#');
-    if (hash != nullptr) {
-      *hash = '\0';
-      rovi_trim_inplace(line);
-      if (line[0] == '\0') {
-        continue;
+  const char *robot_name = root["robot_name"];
+  if (robot_name != nullptr) {
+    rovi_copy_cstr(cfg.robot_name, sizeof(cfg.robot_name), robot_name);
+  }
+
+  JsonObject ui = root["ui"].as<JsonObject>();
+  if (!ui.isNull()) {
+    cfg.dark_theme = ui["dark_theme"] | cfg.dark_theme;
+    cfg.stale_timeout_ms = ui["stale_timeout_ms"] | cfg.stale_timeout_ms;
+
+    JsonObject splash = ui["splash"].as<JsonObject>();
+    if (!splash.isNull()) {
+      const char *splash_path = splash["path"];
+      if (splash_path != nullptr) {
+        rovi_copy_cstr(cfg.splash_path, sizeof(cfg.splash_path), splash_path);
+      }
+      cfg.splash_duration_ms = splash["duration_ms"] | cfg.splash_duration_ms;
+    }
+  }
+
+  JsonObject gauges = root["gauges"].as<JsonObject>();
+  if (!gauges.isNull()) {
+    JsonObject voltage = gauges["voltage"].as<JsonObject>();
+    if (!voltage.isNull()) {
+      cfg.voltage_min_x10 = voltage["min_x10"] | cfg.voltage_min_x10;
+      cfg.voltage_max_x10 = voltage["max_x10"] | cfg.voltage_max_x10;
+      cfg.voltage_initial_x10 = voltage["initial_x10"] | cfg.voltage_initial_x10;
+
+      const char *voltage_min_label = voltage["min_label"];
+      if (voltage_min_label != nullptr) {
+        rovi_copy_cstr(cfg.voltage_min_label, sizeof(cfg.voltage_min_label), voltage_min_label);
+      }
+      const char *voltage_max_label = voltage["max_label"];
+      if (voltage_max_label != nullptr) {
+        rovi_copy_cstr(cfg.voltage_max_label, sizeof(cfg.voltage_max_label), voltage_max_label);
+      }
+
+      JsonArray stages = voltage["stages"].as<JsonArray>();
+      if (!stages.isNull()) {
+        size_t stage_count = 0;
+        for (JsonVariant stage_v : stages) {
+          if (stage_count >= RoviConfig::kMaxStages) {
+            break;
+          }
+
+          JsonObject stage = stage_v.as<JsonObject>();
+          if (stage.isNull()) {
+            continue;
+          }
+
+          int32_t threshold = 0;
+          bool has_threshold = false;
+          if (stage["t"].is<int32_t>()) {
+            threshold = stage["t"].as<int32_t>();
+            has_threshold = true;
+          } else if (stage["threshold"].is<int32_t>()) {
+            threshold = stage["threshold"].as<int32_t>();
+            has_threshold = true;
+          }
+
+          const char *color_str = nullptr;
+          if (stage["c"].is<const char *>()) {
+            color_str = stage["c"].as<const char *>();
+          } else if (stage["color"].is<const char *>()) {
+            color_str = stage["color"].as<const char *>();
+          }
+
+          lv_color_t color;
+          if (!has_threshold || color_str == nullptr || !rovi_parse_lv_color(color_str, &color)) {
+            continue;
+          }
+
+          cfg.voltage_stages[stage_count] = {threshold, color};
+          stage_count++;
+        }
+
+        if (stage_count > 0) {
+          cfg.voltage_stage_count = stage_count;
+          rovi_sort_stages_desc(cfg.voltage_stages, cfg.voltage_stage_count);
+        }
       }
     }
 
-    char *colon = strchr(line, ':');
-    if (colon == nullptr) {
-      continue;
+    JsonObject cpu = gauges["cpu"].as<JsonObject>();
+    if (!cpu.isNull()) {
+      cfg.cpu_min = cpu["min"] | cfg.cpu_min;
+      cfg.cpu_max = cpu["max"] | cfg.cpu_max;
+      cfg.cpu_initial = cpu["initial"] | cfg.cpu_initial;
+
+      const char *cpu_min_label = cpu["min_label"];
+      if (cpu_min_label != nullptr) {
+        rovi_copy_cstr(cfg.cpu_min_label, sizeof(cfg.cpu_min_label), cpu_min_label);
+      }
+      const char *cpu_max_label = cpu["max_label"];
+      if (cpu_max_label != nullptr) {
+        rovi_copy_cstr(cfg.cpu_max_label, sizeof(cfg.cpu_max_label), cpu_max_label);
+      }
+
+      const char *cpu_accent = cpu["accent"];
+      if (cpu_accent != nullptr) {
+        lv_color_t color;
+        if (rovi_parse_lv_color(cpu_accent, &color)) {
+          cfg.cpu_accent = color;
+        }
+      }
     }
-
-    *colon = '\0';
-    char *value = colon + 1;
-
-    rovi_trim_inplace(line);
-    rovi_trim_inplace(value);
-
-    if (strcmp(line, key) != 0) {
-      continue;
-    }
-
-    size_t value_len = strlen(value);
-    if (value_len >= 2 &&
-        ((value[0] == '"' && value[value_len - 1] == '"') || (value[0] == '\'' && value[value_len - 1] == '\''))) {
-      value[value_len - 1] = '\0';
-      value++;
-      rovi_trim_inplace(value);
-    }
-
-    snprintf(out_value, out_value_size, "%s", value);
-    return true;
   }
 
-  return false;
+  if (cfg.voltage_min_x10 > cfg.voltage_max_x10) {
+    int32_t tmp = cfg.voltage_min_x10;
+    cfg.voltage_min_x10 = cfg.voltage_max_x10;
+    cfg.voltage_max_x10 = tmp;
+  }
+  if (cfg.voltage_initial_x10 < cfg.voltage_min_x10) {
+    cfg.voltage_initial_x10 = cfg.voltage_min_x10;
+  } else if (cfg.voltage_initial_x10 > cfg.voltage_max_x10) {
+    cfg.voltage_initial_x10 = cfg.voltage_max_x10;
+  }
+
+  if (cfg.cpu_min > cfg.cpu_max) {
+    int32_t tmp = cfg.cpu_min;
+    cfg.cpu_min = cfg.cpu_max;
+    cfg.cpu_max = tmp;
+  }
+  if (cfg.cpu_initial < cfg.cpu_min) {
+    cfg.cpu_initial = cfg.cpu_min;
+  } else if (cfg.cpu_initial > cfg.cpu_max) {
+    cfg.cpu_initial = cfg.cpu_max;
+  }
+
+  return true;
 }
 
 static void rovi_demo_timer_cb(lv_timer_t *) {
@@ -238,7 +485,7 @@ static void rovi_power_btn_event_cb(lv_event_t *e) {
   Serial.printf("ROVI action requested: %s\n", action);
 
   static const char *btns[] = {"OK", ""};
-  lv_obj_t *mbox = lv_msgbox_create(nullptr, "ROVI", action, btns, true);
+  lv_obj_t *mbox = lv_msgbox_create(nullptr, g_config.robot_name, action, btns, true);
   lv_obj_center(mbox);
 }
 
@@ -296,17 +543,14 @@ static void lcd_reset(void) {
 void setup() {
   Serial.begin(115200);
 
+  rovi_config_set_defaults(g_config);
   bool flashfs_ready = FFat.begin(false);
   if (!flashfs_ready) {
-    Serial.println("FFat mount failed (internal FATFS), skipping config");
+    Serial.println("FFat mount failed (internal FATFS), using defaults");
   } else {
-    char robot_name[48];
-    if (rovi_read_yaml_value(kConfigPath, "robot_name", robot_name, sizeof(robot_name))) {
-      Serial.printf("Config robot_name: %s\n", robot_name);
-    } else {
-      Serial.printf("Config missing: %s (robot_name)\n", kConfigPath);
-    }
+    rovi_config_load_from_ffat(g_config, kConfigPath);
   }
+  Serial.printf("Config robot_name: %s\n", g_config.robot_name);
 
   Wire.begin(I2C_SDA, I2C_SCL);
 
@@ -362,39 +606,40 @@ void setup() {
   lv_fs_fatfs_init();
 
   if (sd_ready) {
-    rovi_show_splash_from_sd(kSplashLvglPath, kSplashDurationMs);
+    rovi_show_splash_from_sd(g_config.splash_path, g_config.splash_duration_ms);
   }
 
   char voltage_buf[16];
-  rovi_format_voltage(voltage_buf, sizeof(voltage_buf), kVoltageValueX10);
+  rovi_format_voltage(voltage_buf, sizeof(voltage_buf), g_config.voltage_initial_x10);
 
   char cpu_buf[16];
-  snprintf(cpu_buf, sizeof(cpu_buf), "%ld%%", static_cast<long>(kCpuValue));
+  snprintf(cpu_buf, sizeof(cpu_buf), "%ld%%", static_cast<long>(g_config.cpu_initial));
 
   live_dashboard::LiveDashboardConfig dash_cfg{};
   dash_cfg.screen_width = static_cast<lv_coord_t>(screenWidth);
   dash_cfg.screen_height = static_cast<lv_coord_t>(screenHeight);
-  dash_cfg.stale_timeout_ms = kValueStaleTimeoutMs;
+  dash_cfg.stale_timeout_ms = g_config.stale_timeout_ms;
+  dash_cfg.dark_theme = g_config.dark_theme;
 
   dash_cfg.voltage_gauge.title = "Voltage";
-  dash_cfg.voltage_gauge.min_value = kVoltageMinX10;
-  dash_cfg.voltage_gauge.max_value = kVoltageMaxX10;
-  dash_cfg.voltage_gauge.initial_value = kVoltageValueX10;
+  dash_cfg.voltage_gauge.min_value = g_config.voltage_min_x10;
+  dash_cfg.voltage_gauge.max_value = g_config.voltage_max_x10;
+  dash_cfg.voltage_gauge.initial_value = g_config.voltage_initial_x10;
   dash_cfg.voltage_gauge.initial_text = voltage_buf;
-  dash_cfg.voltage_gauge.min_label = "9V";
-  dash_cfg.voltage_gauge.max_label = "13V";
-  dash_cfg.voltage_gauge.stages = kBatteryVoltageStages;
-  dash_cfg.voltage_gauge.stage_count = sizeof(kBatteryVoltageStages) / sizeof(kBatteryVoltageStages[0]);
+  dash_cfg.voltage_gauge.min_label = g_config.voltage_min_label;
+  dash_cfg.voltage_gauge.max_label = g_config.voltage_max_label;
+  dash_cfg.voltage_gauge.stages = g_config.voltage_stages;
+  dash_cfg.voltage_gauge.stage_count = g_config.voltage_stage_count;
   dash_cfg.voltage_gauge.stages_fallback_color = lv_palette_main(LV_PALETTE_GREEN);
 
   dash_cfg.cpu_gauge.title = "CPU";
-  dash_cfg.cpu_gauge.min_value = kCpuMin;
-  dash_cfg.cpu_gauge.max_value = kCpuMax;
-  dash_cfg.cpu_gauge.initial_value = kCpuValue;
+  dash_cfg.cpu_gauge.min_value = g_config.cpu_min;
+  dash_cfg.cpu_gauge.max_value = g_config.cpu_max;
+  dash_cfg.cpu_gauge.initial_value = g_config.cpu_initial;
   dash_cfg.cpu_gauge.initial_text = cpu_buf;
-  dash_cfg.cpu_gauge.min_label = "0%";
-  dash_cfg.cpu_gauge.max_label = "100%";
-  dash_cfg.cpu_gauge.accent_color = lv_palette_main(LV_PALETTE_AMBER);
+  dash_cfg.cpu_gauge.min_label = g_config.cpu_min_label;
+  dash_cfg.cpu_gauge.max_label = g_config.cpu_max_label;
+  dash_cfg.cpu_gauge.accent_color = g_config.cpu_accent;
 
   dash_cfg.shutdown_button.tile_title = "Power";
   dash_cfg.shutdown_button.button_label = "Shutdown";
@@ -404,7 +649,7 @@ void setup() {
   dash_cfg.restart_button.button_label = "Restart";
   dash_cfg.restart_button.button_color = lv_palette_main(LV_PALETTE_BLUE);
 
-  dash_cfg.info_tile.title = "ROVI";
+  dash_cfg.info_tile.title = g_config.robot_name;
   dash_cfg.info_tile.subtitle = "Dashboard (demo timer)";
   dash_cfg.info_tile.body = "Demo timer updates\nNo live ROS data yet";
 

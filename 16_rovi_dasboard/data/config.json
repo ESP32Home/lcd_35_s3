@@ -1,0 +1,33 @@
+{
+  "robot_name": "rovi",
+  "ui": {
+    "dark_theme": true,
+    "stale_timeout_ms": 5000,
+    "splash": { "path": "S:rovi.png", "duration_ms": 3000 }
+  },
+  "gauges": {
+    "voltage": {
+      "min_x10": 90,
+      "max_x10": 130,
+      "initial_x10": 121,
+      "min_label": "9V",
+      "max_label": "13V",
+      "stages": [
+        { "t": 126, "c": "green" },
+        { "t": 111, "c": "green" },
+        { "t": 110, "c": "amber" },
+        { "t": 105, "c": "orange" },
+        { "t": 90, "c": "red" }
+      ]
+    },
+    "cpu": {
+      "min": 0,
+      "max": 100,
+      "initial": 37,
+      "min_label": "0%",
+      "max_label": "100%",
+      "accent": "amber"
+    }
+  }
+}
+
