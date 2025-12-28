@@ -3,9 +3,12 @@
 #include <Arduino.h>
 #include <FFat.h>
 #include <Wire.h>
+#include <SD_MMC.h>
 
 #include <cstdio>
 #include <new>
+#include <cstring>
+#include <memory>
 
 #include <Arduino_GFX_Library.h>
 #include <lvgl.h>
@@ -14,6 +17,15 @@
 #include "TouchDrvFT6X36.hpp"
 
 #include "esp_heap_caps.h"
+
+#ifndef WS_LVGL_DRAW_BUF_USE_PSRAM
+#define WS_LVGL_DRAW_BUF_USE_PSRAM 0
+#endif
+#ifndef ROVI_ENABLE_SCREENSHOTS
+#define ROVI_ENABLE_SCREENSHOTS 0
+#endif
+
+static constexpr bool kScreenshotsEnabled = (ROVI_ENABLE_SCREENSHOTS != 0);
 
 namespace ws_lcd_35_s3_hal {
 namespace {
@@ -33,6 +45,15 @@ static constexpr int kLcdVerRes = 480;
 
 static constexpr int kI2cSda = 8;
 static constexpr int kI2cScl = 7;
+
+// SD (SD_MMC 1-bit mode) wiring from 14_lvgl_image sample
+static constexpr int kSdClk = 11;
+static constexpr int kSdCmd = 10;
+static constexpr int kSdD0 = 9;
+
+// Draw buffer placement:
+// - Default: internal RAM (DMA-capable) for faster SPI transfers.
+// - To force PSRAM for experimentation, build with -DWS_LVGL_DRAW_BUF_USE_PSRAM=1
 
 struct ArduinoFsFile {
   fs::File file;
@@ -68,6 +89,11 @@ static void disp_flush_cb(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_col
 #else
   g_gfx.draw16bitRGBBitmap(area->x1, area->y1, reinterpret_cast<uint16_t *>(&color_p->full), w, h);
 #endif
+
+  if (disp_drv != nullptr && disp_drv->user_data != nullptr) {
+    auto *hal = static_cast<WsLcd35S3Hal *>(disp_drv->user_data);
+    hal->copyAreaToMirror_(area, color_p);
+  }
 
   lv_disp_flush_ready(disp_drv);
 }
@@ -207,15 +233,37 @@ bool WsLcd35S3Hal::begin() {
   }
 
   flashfs_mounted_ = initFlashFs_();
+  sd_fs_ = &SD_MMC;
+  if (kScreenshotsEnabled) {
+    sd_mounted_ = initSdCard_();
+    if (!sd_mounted_) {
+      Serial.println("WARN: SD card init failed (screenshots disabled)");
+    }
+  }
 
   lv_init();
 
   screen_width_ = static_cast<uint16_t>(g_gfx.width());
   screen_height_ = static_cast<uint16_t>(g_gfx.height());
 
+  if (kScreenshotsEnabled && sd_mounted_) {
+    const uint32_t fb_bytes = static_cast<uint32_t>(screen_width_) * static_cast<uint32_t>(screen_height_) * sizeof(lv_color_t);
+    mirror_fb_ = static_cast<lv_color_t *>(heap_caps_malloc(fb_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (mirror_fb_ == nullptr) {
+      Serial.println("WARN: Screenshot mirror buffer alloc failed (PSRAM)");
+    } else {
+      memset(mirror_fb_, 0, fb_bytes);
+    }
+  }
+
   const uint32_t buf_pixels = static_cast<uint32_t>(screen_width_) * 120U;
-  g_disp_draw_buf1 = static_cast<lv_color_t *>(heap_caps_malloc(buf_pixels * sizeof(lv_color_t), MALLOC_CAP_DEFAULT | MALLOC_CAP_8BIT));
-  g_disp_draw_buf2 = static_cast<lv_color_t *>(heap_caps_malloc(buf_pixels * sizeof(lv_color_t), MALLOC_CAP_DEFAULT | MALLOC_CAP_8BIT));
+  const uint32_t buf_bytes = buf_pixels * sizeof(lv_color_t);
+  const uint32_t caps = (WS_LVGL_DRAW_BUF_USE_PSRAM != 0)
+                            ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+                            : (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+
+  g_disp_draw_buf1 = static_cast<lv_color_t *>(heap_caps_malloc(buf_bytes, caps));
+  g_disp_draw_buf2 = static_cast<lv_color_t *>(heap_caps_malloc(buf_bytes, caps));
   if (g_disp_draw_buf1 == nullptr || g_disp_draw_buf2 == nullptr) {
     Serial.println("FATAL: LVGL draw buffers alloc failed");
     return false;
@@ -277,6 +325,144 @@ bool WsLcd35S3Hal::initFlashFs_() {
     return false;
   }
   return true;
+}
+
+bool WsLcd35S3Hal::initSdCard_() {
+  if (!SD_MMC.setPins(kSdClk, kSdCmd, kSdD0)) {
+    Serial.println("SD_MMC.setPins failed");
+    return false;
+  }
+  if (!SD_MMC.begin("/sdcard", true /* 1-bit mode */)) {
+    Serial.println("SD_MMC.begin failed");
+    return false;
+  }
+  return true;
+}
+
+void WsLcd35S3Hal::copyAreaToMirror_(const lv_area_t *area, lv_color_t *color_p) {
+  if (!kScreenshotsEnabled) {
+    return;
+  }
+  if (mirror_fb_ == nullptr || area == nullptr || color_p == nullptr) {
+    return;
+  }
+
+  const uint32_t w = static_cast<uint32_t>(area->x2 - area->x1 + 1);
+  const uint32_t h = static_cast<uint32_t>(area->y2 - area->y1 + 1);
+  const uint32_t stride_pixels = static_cast<uint32_t>(screen_width_);
+  for (uint32_t row = 0; row < h; ++row) {
+    const uint32_t dst_y = static_cast<uint32_t>(area->y1) + row;
+    lv_color_t *dst = mirror_fb_ + (dst_y * stride_pixels + static_cast<uint32_t>(area->x1));
+    const lv_color_t *src = color_p + (row * w);
+    memcpy(dst, src, w * sizeof(lv_color_t));
+  }
+}
+
+bool WsLcd35S3Hal::writeBmp_(fs::File &file) {
+  if (!kScreenshotsEnabled || mirror_fb_ == nullptr) {
+    return false;
+  }
+
+  const uint32_t width = screen_width_;
+  const uint32_t height = screen_height_;
+  const uint32_t row_bytes = width * sizeof(uint16_t);
+  const uint32_t row_padded = (row_bytes + 3U) & ~3U; // BMP rows align to 4 bytes
+  const uint32_t pixel_bytes = row_padded * height;
+  const uint32_t header_bytes = 14U + 40U + 12U; // BITMAPFILEHEADER + BITMAPINFOHEADER + bit masks
+  const uint32_t file_size = header_bytes + pixel_bytes;
+
+  uint8_t header[66]{};
+  // BITMAPFILEHEADER
+  header[0] = 'B';
+  header[1] = 'M';
+  header[2] = static_cast<uint8_t>(file_size & 0xFF);
+  header[3] = static_cast<uint8_t>((file_size >> 8) & 0xFF);
+  header[4] = static_cast<uint8_t>((file_size >> 16) & 0xFF);
+  header[5] = static_cast<uint8_t>((file_size >> 24) & 0xFF);
+  header[10] = static_cast<uint8_t>(header_bytes); // pixel data offset
+
+  // BITMAPINFOHEADER
+  header[14] = 40; // biSize
+  header[18] = static_cast<uint8_t>(width & 0xFF);
+  header[19] = static_cast<uint8_t>((width >> 8) & 0xFF);
+  header[20] = static_cast<uint8_t>((width >> 16) & 0xFF);
+  header[21] = static_cast<uint8_t>((width >> 24) & 0xFF);
+  header[22] = static_cast<uint8_t>(height & 0xFF);
+  header[23] = static_cast<uint8_t>((height >> 8) & 0xFF);
+  header[24] = static_cast<uint8_t>((height >> 16) & 0xFF);
+  header[25] = static_cast<uint8_t>((height >> 24) & 0xFF);
+  header[26] = 1;   // planes
+  header[28] = 16;  // bit count
+  header[30] = 3;   // compression BI_BITFIELDS
+  header[34] = static_cast<uint8_t>(pixel_bytes & 0xFF);
+  header[35] = static_cast<uint8_t>((pixel_bytes >> 8) & 0xFF);
+  header[36] = static_cast<uint8_t>((pixel_bytes >> 16) & 0xFF);
+  header[37] = static_cast<uint8_t>((pixel_bytes >> 24) & 0xFF);
+
+  // Bit masks for RGB565
+  constexpr uint32_t kMaskR = 0xF800;
+  constexpr uint32_t kMaskG = 0x07E0;
+  constexpr uint32_t kMaskB = 0x001F;
+  header[54] = static_cast<uint8_t>(kMaskR & 0xFF);
+  header[55] = static_cast<uint8_t>((kMaskR >> 8) & 0xFF);
+  header[58] = static_cast<uint8_t>(kMaskG & 0xFF);
+  header[59] = static_cast<uint8_t>((kMaskG >> 8) & 0xFF);
+  header[62] = static_cast<uint8_t>(kMaskB & 0xFF);
+  header[63] = static_cast<uint8_t>((kMaskB >> 8) & 0xFF);
+
+  if (file.write(header, header_bytes) != header_bytes) {
+    return false;
+  }
+
+  std::unique_ptr<uint8_t[]> row(new (std::nothrow) uint8_t[row_padded]);
+  if (!row) {
+    return false;
+  }
+
+  for (int32_t y = static_cast<int32_t>(height) - 1; y >= 0; --y) { // BMP writes bottom-up
+    const lv_color_t *src = mirror_fb_ + (static_cast<uint32_t>(y) * width);
+    memcpy(row.get(), src, row_bytes);
+    if (row_padded > row_bytes) {
+      memset(row.get() + row_bytes, 0, row_padded - row_bytes);
+    }
+    if (file.write(row.get(), row_padded) != row_padded) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool WsLcd35S3Hal::captureScreenshotBmp(const char *path) {
+  if (!kScreenshotsEnabled) {
+    Serial.println("Screenshots disabled at compile time (ROVI_ENABLE_SCREENSHOTS=0)");
+    return false;
+  }
+  if (!sd_mounted_) {
+    Serial.println("SD card not mounted");
+    return false;
+  }
+  if (mirror_fb_ == nullptr) {
+    Serial.println("Screenshot mirror buffer missing");
+    return false;
+  }
+  if (path == nullptr || path[0] == '\0') {
+    Serial.println("Invalid screenshot path");
+    return false;
+  }
+
+  fs::File file = sd_fs_->open(path, FILE_WRITE);
+  if (!file) {
+    Serial.printf("Failed to open screenshot path: %s\n", path);
+    return false;
+  }
+
+  const bool ok = writeBmp_(file);
+  file.close();
+  if (!ok) {
+    Serial.println("Screenshot write failed");
+  }
+  return ok;
 }
 
 void WsLcd35S3Hal::registerFlashFsWithLvgl_(char drive_letter) {

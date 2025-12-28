@@ -55,6 +55,11 @@ public:
   bool onAction(const char *action_id, ActionCallback cb, void *user);
 
   const char *robotName() const;
+
+  // Demo replay helpers (valid only if demo_replay=true in options)
+  bool demoReplayActive() const;
+  uint32_t demoFrameIndex() const; // increments per ingested demo line
+  uint32_t demoCycle() const;      // increments each time the demo file loops
 };
 
 } // namespace live_dashboard

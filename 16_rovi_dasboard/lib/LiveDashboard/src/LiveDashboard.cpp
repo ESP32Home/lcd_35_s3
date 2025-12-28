@@ -511,6 +511,9 @@ public:
   bool ingestEventLine(char *line);
   bool onAction(const char *action_id, LiveDashboard::ActionCallback cb, void *user);
   const char *robotName() const { return robot_name_; }
+  bool demo_replay() const { return demo_replay_; }
+  uint32_t demo_frame_index() const { return demo_frame_index_; }
+  uint32_t demo_cycle() const { return demo_cycle_; }
 
 private:
   lv_obj_t *find_tile_(const char *tile_id);
@@ -543,6 +546,8 @@ private:
   uint32_t demo_last_ms_ = 0;
   File demo_file_{};
   char demo_line_[kEventLineMaxLen + 1]{};
+  uint32_t demo_frame_index_ = 0;
+  uint32_t demo_cycle_ = 0;
 
   TileSlot tiles_[LIVE_DASHBOARD_MAX_TILES]{};
   size_t tile_count_ = 0;
@@ -601,6 +606,8 @@ bool LiveDashboardImpl::begin(LiveDashboard &api,
   copy_cstr(demo_path_, sizeof(demo_path_), options.demo_path);
   demo_period_ms_ = options.demo_period_ms;
   demo_last_ms_ = millis();
+  demo_frame_index_ = 0;
+  demo_cycle_ = 0;
   if (demo_file_) {
     demo_file_.close();
   }
@@ -645,12 +652,14 @@ void LiveDashboardImpl::tick() {
   demo_last_ms_ = now;
 
   for (int attempts = 0; attempts < 8; ++attempts) {
+    bool wrapped = false;
     bool truncated = false;
     if (!read_line_(demo_file_, demo_line_, sizeof(demo_line_), &truncated)) {
       demo_file_.seek(0);
       if (!read_line_(demo_file_, demo_line_, sizeof(demo_line_), &truncated)) {
         return;
       }
+      wrapped = true;
     }
 
     if (truncated) {
@@ -666,7 +675,13 @@ void LiveDashboardImpl::tick() {
       continue;
     }
 
+    if (wrapped) {
+      ++demo_cycle_;
+      demo_frame_index_ = 0;
+    }
+
     ingestEventLineInternal_(line);
+    ++demo_frame_index_;
     break;
   }
 }
@@ -1500,6 +1515,12 @@ bool LiveDashboard::ingestLine(char *line) { return g_impl.ingestLine(line); }
 bool LiveDashboard::ingestEventLine(char *line) { return g_impl.ingestEventLine(line); }
 
 bool LiveDashboard::onAction(const char *action_id, ActionCallback cb, void *user) { return g_impl.onAction(action_id, cb, user); }
+
+bool LiveDashboard::demoReplayActive() const { return g_impl.demo_replay(); }
+
+uint32_t LiveDashboard::demoFrameIndex() const { return g_impl.demo_frame_index(); }
+
+uint32_t LiveDashboard::demoCycle() const { return g_impl.demo_cycle(); }
 
 const char *LiveDashboard::robotName() const { return g_impl.robotName(); }
 
