@@ -10,16 +10,21 @@ extern "C" {
 #include "wear_levelling.h"
 }
 
+#ifndef FS_SD_DRIVE_ENABLE_SD
+#define FS_SD_DRIVE_ENABLE_SD 0
+#endif
+
+#if FS_SD_DRIVE_ENABLE_SD
 #include "driver/gpio.h"
 #include "driver/sdmmc_host.h"
 #include "sdmmc_cmd.h"
+#endif
 
 static constexpr int kSdClk = 11;
 static constexpr int kSdCmd = 10;
 static constexpr int kSdD0 = 9;
 
 static USBMSC g_msc_flash;
-static USBMSC g_msc_sd;
 
 static wl_handle_t g_flash_wl = WL_INVALID_HANDLE;
 static uint32_t g_flash_block_count = 0;
@@ -30,6 +35,8 @@ static bool g_flash_cache_dirty = false;
 static uint32_t g_flash_cache_lba = 0;
 static uint8_t g_flash_cache[4096];
 
+#if FS_SD_DRIVE_ENABLE_SD
+static USBMSC g_msc_sd;
 static bool g_sd_ready = false;
 static sdmmc_card_t g_sd_card{};
 static uint32_t g_sd_block_count = 0;
@@ -39,6 +46,7 @@ static bool g_sd_cache_valid = false;
 static bool g_sd_cache_dirty = false;
 static uint32_t g_sd_cache_lba = 0;
 static uint8_t g_sd_cache[512];
+#endif
 
 static bool flash_commit_cache_() {
   if (!g_flash_cache_valid || !g_flash_cache_dirty || g_flash_wl == WL_INVALID_HANDLE) {
@@ -145,6 +153,7 @@ static bool flash_start_stop_cb_(uint8_t power_condition, bool start, bool load_
   return true;
 }
 
+#if FS_SD_DRIVE_ENABLE_SD
 static bool sd_commit_cache_() {
   if (!g_sd_cache_valid || !g_sd_cache_dirty || !g_sd_ready) {
     return true;
@@ -255,6 +264,7 @@ static bool sd_start_stop_cb_(uint8_t power_condition, bool start, bool load_eje
   }
   return true;
 }
+#endif
 
 static bool mount_flash_for_msc_() {
   const esp_partition_t *part =
@@ -289,6 +299,7 @@ static bool mount_flash_for_msc_() {
   return true;
 }
 
+#if FS_SD_DRIVE_ENABLE_SD
 static bool init_sd_1bit_() {
   const int clk_gpio = digitalPinToGPIONumber(kSdClk);
   const int cmd_gpio = digitalPinToGPIONumber(kSdCmd);
@@ -355,17 +366,22 @@ static bool init_sd_1bit_() {
                 static_cast<unsigned>(g_sd_block_size));
   return true;
 }
+#endif
 
 void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.println();
-  Serial.println("17_fs_sd_drive: internal ffat + SD_MMC as USB MSC (2 drives)");
+  Serial.println("17_fs_sd_drive: internal ffat as USB MSC");
 
-  // Init SD card (same wiring as sample 14_lvgl_image, 1-bit SDMMC).
+#if FS_SD_DRIVE_ENABLE_SD
+  Serial.println("SD LUN enabled");
   if (!init_sd_1bit_()) {
     Serial.println("SD: init failed (no card?)");
   }
+#else
+  Serial.println("SD LUN disabled (FS_SD_DRIVE_ENABLE_SD=0)");
+#endif
 
   // Optional: mount FFat briefly to prove the FS is OK (then unmount, since USB MSC will own it).
   if (FFat.begin(false)) {
@@ -394,6 +410,7 @@ void setup() {
     Serial.println("MSC: flash LUN disabled");
   }
 
+#if FS_SD_DRIVE_ENABLE_SD
   g_msc_sd.vendorID("ESP32");
   g_msc_sd.productID("SDMMC");
   g_msc_sd.productRevision("1.0");
@@ -408,6 +425,7 @@ void setup() {
     g_msc_sd.mediaPresent(false);
     Serial.println("MSC: SD LUN disabled");
   }
+#endif
 
   const bool usb_ok = USB.begin();
   Serial.printf("USB.begin(): %s\n", usb_ok ? "ok" : "failed");
