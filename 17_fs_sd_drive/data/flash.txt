@@ -1,0 +1,4 @@
+Hello from internal flash FATFS (ffat).
+
+If you can read this from your PC as a USB drive, the internal FS MSC is working.
+
