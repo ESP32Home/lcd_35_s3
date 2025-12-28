@@ -3,6 +3,8 @@
 
 #include <Arduino.h>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include "esp32-hal-psram.h"
@@ -33,6 +35,41 @@ static uint32_t g_capture_counter = 0;
 static uint32_t g_last_demo_frame = 0;
 static char g_capture_dir[64]{};
 static bool g_capture_listed = false;
+
+static bool choose_next_capture_dir() {
+  if (!g_hal.sdFs().exists("/screenshots")) {
+    g_hal.sdFs().mkdir("/screenshots");
+  }
+
+  uint32_t max_run = 0;
+  File dir = g_hal.sdFs().open("/screenshots");
+  if (dir && dir.isDirectory()) {
+    File f = dir.openNextFile();
+    while (f) {
+      if (f.isDirectory()) {
+        const char *name = f.name();
+        if (name != nullptr && strncmp(name, "/screenshots/run_", 17) == 0) {
+          const char *num = name + 17;
+          char *end = nullptr;
+          unsigned long val = strtoul(num, &end, 10);
+          if (end != num && val > max_run) {
+            max_run = static_cast<uint32_t>(val);
+          }
+        }
+      }
+      f = dir.openNextFile();
+    }
+  }
+
+  const uint32_t next_run = max_run + 1;
+  snprintf(g_capture_dir, sizeof(g_capture_dir), "/screenshots/run_%u", static_cast<unsigned>(next_run));
+  if (!g_hal.sdFs().mkdir(g_capture_dir)) {
+    Serial.printf("WARN: mkdir %s failed (screenshots disabled)\n", g_capture_dir);
+    g_capture_dir[0] = '\0';
+    return false;
+  }
+  return true;
+}
 
 static void touch_allocation(void *ptr, size_t size) {
   if (ptr == nullptr || size == 0) {
@@ -274,13 +311,7 @@ void setup() {
 
 #if ROVI_ENABLE_SCREENSHOTS
   if (kCaptureEnabled && g_hal.sdFsMounted()) {
-    if (!g_hal.sdFs().exists("/screenshots")) {
-      g_hal.sdFs().mkdir("/screenshots");
-    }
-    snprintf(g_capture_dir, sizeof(g_capture_dir), "/screenshots/run_%lu", static_cast<unsigned long>(millis()));
-    if (!g_hal.sdFs().mkdir(g_capture_dir)) {
-      Serial.printf("WARN: mkdir %s failed (screenshots disabled)\n", g_capture_dir);
-    } else {
+    if (choose_next_capture_dir()) {
       g_capture_active = true;
       g_capture_target_cycle = g_dashboard.demoCycle();
       g_capture_counter = 0;
