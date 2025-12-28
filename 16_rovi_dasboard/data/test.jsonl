@@ -1,0 +1,15 @@
+{"id":"voltage","value":126,"text":"12.6V"}
+{"id":"voltage","value":122,"text":"12.2V"}
+{"id":"voltage","value":111,"text":"11.1V"}
+{"id":"voltage","value":110,"text":"11.0V"}
+{"id":"voltage","value":106,"text":"10.6V"}
+{"id":"voltage","value":95,"text":"9.5V"}
+{"id":"voltage","value":120,"text":"12.0V"}
+{"id":"voltage","value":126,"text":"12.6V"}
+{"id":"cpu","value":78,"text":"78%"}
+{"id":"voltage","value":105,"text":"10.5V"}
+{"id":"voltage","value":95,"text":"9.5V"}
+{"id":"voltage","value":111,"text":"11.1V"}
+{"id":"voltage","value":122,"text":"12.2V"}
+[{"id":"voltage","value":126,"text":"12.6V"},{"id":"cpu","value":12,"text":"12%"}]
+

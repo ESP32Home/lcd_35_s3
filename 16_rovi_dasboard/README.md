@@ -46,6 +46,19 @@ In `src/main.cpp` the demo uses:
 - `g_dashboard.publishGauge("cpu", cpu_percent, "37%")`
 - `g_dashboard.tick()` (called from `loop()` to enforce stale/`--` behavior)
 
+## Demo input (JSONL + Serial)
+
+The sample includes a simple “event replay” demo:
+
+- `data/test.jsonl` is uploaded to internal FFat and replayed once per second (loops at EOF).
+- You can also paste the same JSON lines into the serial monitor; the line is applied when a full newline is received.
+- Disable it by setting `ROVI_ENABLE_DEMO` to `0` in `src/main.cpp`.
+
+Line format:
+
+- Single update: `{"id":"voltage","value":121,"text":"12.1V"}`
+- Multiple updates in one line: `[{"id":"voltage","value":121,"text":"12.1V"},{"id":"cpu","value":37,"text":"37%"}]`
+
 ## Build (PlatformIO)
 
 From the project folder:
