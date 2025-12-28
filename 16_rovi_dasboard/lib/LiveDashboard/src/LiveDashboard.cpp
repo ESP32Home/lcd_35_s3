@@ -507,6 +507,7 @@ public:
   void tick();
 
   bool publishGauge(const char *gauge_id, int32_t value, const char *text);
+  bool ingestLine(char *line);
   bool ingestEventLine(char *line);
   bool onAction(const char *action_id, LiveDashboard::ActionCallback cb, void *user);
   const char *robotName() const { return robot_name_; }
@@ -515,6 +516,9 @@ private:
   lv_obj_t *find_tile_(const char *tile_id);
   GaugeSlot *find_gauge_(const char *gauge_id);
   HzRowSlot *find_hz_row_(const char *row_id);
+
+  void stop_demo_replay_(const char *reason);
+  bool ingestEventLineInternal_(char *line);
 
   bool load_and_build_(LiveDashboard &api, fs::FS &fs, const char *config_path);
   bool build_from_json_(LiveDashboard &api, JsonObject root);
@@ -662,7 +666,7 @@ void LiveDashboardImpl::tick() {
       continue;
     }
 
-    ingestEventLine(line);
+    ingestEventLineInternal_(line);
     break;
   }
 }
@@ -702,7 +706,94 @@ bool LiveDashboardImpl::publishGauge(const char *gauge_id, int32_t value, const 
   return true;
 }
 
+void LiveDashboardImpl::stop_demo_replay_(const char *reason) {
+  if (!demo_replay_) {
+    return;
+  }
+
+  demo_replay_ = false;
+  if (demo_file_) {
+    demo_file_.close();
+  }
+  demo_file_ = File();
+  demo_line_[0] = '\0';
+
+  Serial.printf("DEMO: stopped (%s)\n", (reason != nullptr && reason[0] != '\0') ? reason : "external input");
+}
+
+bool LiveDashboardImpl::ingestLine(char *line) {
+  if (line == nullptr) {
+    Serial.println("LINE: line is null");
+    return false;
+  }
+
+  while (*line == ' ' || *line == '\t' || *line == '\r' || *line == '\n') {
+    ++line;
+  }
+
+  if (*line == '\0') {
+    return false;
+  }
+
+  size_t len = strlen(line);
+  while (len > 0 && (line[len - 1] == ' ' || line[len - 1] == '\t' || line[len - 1] == '\r' || line[len - 1] == '\n')) {
+    line[--len] = '\0';
+  }
+
+  if (len > kEventLineMaxLen) {
+    Serial.printf("LINE: line too long (%u > %u)\n", static_cast<unsigned>(len), static_cast<unsigned>(kEventLineMaxLen));
+    return false;
+  }
+
+  if (line[0] == '{' || line[0] == '[') {
+    const bool ok = ingestEventLineInternal_(line);
+    if (ok) {
+      stop_demo_replay_("external JSON");
+    }
+    return ok;
+  }
+
+  for (size_t i = 0; i < button_count_; ++i) {
+    if (!buttons_[i].used) continue;
+    if (strncmp(buttons_[i].action_id, line, sizeof(buttons_[i].action_id)) != 0) continue;
+
+    stop_demo_replay_("external cmd");
+
+    if (buttons_[i].cb == nullptr) {
+      Serial.printf("CMD: action has no callback: %s\n", buttons_[i].action_id);
+      return false;
+    }
+
+    buttons_[i].cb(buttons_[i].action_id, buttons_[i].user);
+    return true;
+  }
+
+  Serial.printf("CMD: unknown action: %s\n", line);
+  return false;
+}
+
 bool LiveDashboardImpl::ingestEventLine(char *line) {
+  if (line == nullptr) {
+    Serial.println("EVENT: line is null");
+    return false;
+  }
+
+  char *p = line;
+  while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+    ++p;
+  }
+  if (*p == '\0') {
+    return false;
+  }
+
+  const bool ok = ingestEventLineInternal_(p);
+  if (ok) {
+    stop_demo_replay_("external JSON");
+  }
+  return ok;
+}
+
+bool LiveDashboardImpl::ingestEventLineInternal_(char *line) {
   if (line == nullptr) {
     Serial.println("EVENT: line is null");
     return false;
@@ -1403,6 +1494,8 @@ bool LiveDashboard::begin(fs::FS &fs,
 void LiveDashboard::tick() { g_impl.tick(); }
 
 bool LiveDashboard::publishGauge(const char *gauge_id, int32_t value, const char *text) { return g_impl.publishGauge(gauge_id, value, text); }
+
+bool LiveDashboard::ingestLine(char *line) { return g_impl.ingestLine(line); }
 
 bool LiveDashboard::ingestEventLine(char *line) { return g_impl.ingestEventLine(line); }
 

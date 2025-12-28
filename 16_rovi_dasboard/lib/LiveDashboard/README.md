@@ -31,12 +31,17 @@ ui.tick();  // handles stale gauges and optional JSONL replay
 - `bool publishGauge(const char* id, int32_t value, const char* text)`
   - Updates a configured item by its `id` (arc gauge or `hz_lists` row).
   - Returns `false` if `id` is unknown.
+- `bool ingestLine(char* line)`
+  - Stops JSONL replay (if enabled) on the first successfully handled external input.
+  - If the line starts with `{` or `[`, it is parsed as a JSON event line (same format as JSONL).
+  - Otherwise it is treated as a command and matched against configured button `action_id` values (invokes the registered `onAction()` callback).
 - `bool ingestEventLine(char* line)`
   - Parses and applies a single JSON “event line” (same format as JSONL).
   - Accepts either an object or an array of objects:
     - `{"id":"voltage","value":121,"text":"12.1V"}`
     - `[{"id":"voltage","value":121,"text":"12.1V"},{"id":"cpu","value":37,"text":"37%"}]`
   - Limits (hard errors): max line length 1024 chars; max 5 events per line; `text` is mandatory.
+  - Also stops JSONL replay (if enabled) after a line is successfully applied.
 - `bool onAction(const char* action_id, ActionCallback cb, void* user)`
   - Binds a C callback to buttons whose `action_id` matches.
 
@@ -45,6 +50,7 @@ ui.tick();  // handles stale gauges and optional JSONL replay
 If `LiveDashboardOptions.demo_replay == true`, `tick()` will read one line from `demo_path` every `demo_period_ms` and apply it via `ingestEventLine()`.
 
 - Missing `demo_path` file is a **fatal error** (dashboard init fails and shows an error screen).
+- Any external input via `ingestLine()` / `ingestEventLine()` stops JSONL replay immediately (so real data can take over).
 
 ## Config schema (`config.json`)
 

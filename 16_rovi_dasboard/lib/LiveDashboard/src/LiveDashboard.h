@@ -50,6 +50,7 @@ public:
   void tick();
 
   bool publishGauge(const char *gauge_id, int32_t value, const char *text);
+  bool ingestLine(char *line);
   bool ingestEventLine(char *line);
   bool onAction(const char *action_id, ActionCallback cb, void *user);
 

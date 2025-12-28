@@ -35,7 +35,7 @@ static void poll_event_lines_from_serial() {
       if (!rx_drop) {
         rx[rx_len] = '\0';
         if (rx_len > 0) {
-          g_dashboard.ingestEventLine(rx);
+          g_dashboard.ingestLine(rx);
         }
       }
       rx_len = 0;
