@@ -9,6 +9,9 @@
 #include <Arduino_GFX_Library.h>
 #include "TCA9554.h"
 #include "TouchDrvFT6X36.hpp"
+#include <FFat.h>
+#include <ctype.h>
+#include <string.h>
 #include <stdio.h>
 #include <SD_MMC.h>
 
@@ -43,6 +46,7 @@ static constexpr int32_t kCpuValue = 37;
 
 static constexpr uint32_t kSplashDurationMs = 3000;
 static const char *kSplashLvglPath = "S:rovi.png";
+static const char *kConfigPath = "/config.yaml";
 
 TCA9554 TCA(0x20);
 
@@ -72,6 +76,90 @@ static const live_dashboard::Stage kBatteryVoltageStages[] = {
 };
 
 static live_dashboard::LiveDashboard g_dashboard;
+
+static void rovi_trim_inplace(char *s) {
+  if (s == nullptr) {
+    return;
+  }
+
+  char *start = s;
+  while (*start != '\0' && isspace(static_cast<unsigned char>(*start))) {
+    start++;
+  }
+
+  if (start != s) {
+    size_t len = strlen(start);
+    memmove(s, start, len + 1);
+  }
+
+  size_t len = strlen(s);
+  while (len > 0 && isspace(static_cast<unsigned char>(s[len - 1]))) {
+    s[len - 1] = '\0';
+    len--;
+  }
+}
+
+static bool rovi_read_yaml_value(const char *path, const char *key, char *out_value, size_t out_value_size) {
+  if (path == nullptr || key == nullptr || out_value == nullptr || out_value_size == 0) {
+    return false;
+  }
+
+  File f = FFat.open(path, "r");
+  if (!f) {
+    return false;
+  }
+
+  char line[128];
+  while (f.available()) {
+    size_t n = f.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = '\0';
+    if (n > 0 && line[n - 1] == '\r') {
+      line[n - 1] = '\0';
+    }
+
+    rovi_trim_inplace(line);
+    if (line[0] == '\0' || line[0] == '#') {
+      continue;
+    }
+
+    char *hash = strchr(line, '#');
+    if (hash != nullptr) {
+      *hash = '\0';
+      rovi_trim_inplace(line);
+      if (line[0] == '\0') {
+        continue;
+      }
+    }
+
+    char *colon = strchr(line, ':');
+    if (colon == nullptr) {
+      continue;
+    }
+
+    *colon = '\0';
+    char *value = colon + 1;
+
+    rovi_trim_inplace(line);
+    rovi_trim_inplace(value);
+
+    if (strcmp(line, key) != 0) {
+      continue;
+    }
+
+    size_t value_len = strlen(value);
+    if (value_len >= 2 &&
+        ((value[0] == '"' && value[value_len - 1] == '"') || (value[0] == '\'' && value[value_len - 1] == '\''))) {
+      value[value_len - 1] = '\0';
+      value++;
+      rovi_trim_inplace(value);
+    }
+
+    snprintf(out_value, out_value_size, "%s", value);
+    return true;
+  }
+
+  return false;
+}
 
 static void rovi_demo_timer_cb(lv_timer_t *) {
   uint32_t now = millis();
@@ -207,6 +295,18 @@ static void lcd_reset(void) {
 
 void setup() {
   Serial.begin(115200);
+
+  bool flashfs_ready = FFat.begin(false);
+  if (!flashfs_ready) {
+    Serial.println("FFat mount failed (internal FATFS), skipping config");
+  } else {
+    char robot_name[48];
+    if (rovi_read_yaml_value(kConfigPath, "robot_name", robot_name, sizeof(robot_name))) {
+      Serial.printf("Config robot_name: %s\n", robot_name);
+    } else {
+      Serial.printf("Config missing: %s (robot_name)\n", kConfigPath);
+    }
+  }
 
   Wire.begin(I2C_SDA, I2C_SCL);
 

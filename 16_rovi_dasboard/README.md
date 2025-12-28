@@ -35,6 +35,15 @@ The rovi‑specific parts stay in `src/main.cpp`:
 
 Nothing needs to be “flashed” for the splash image when loading from SD: it’s read at runtime from the card.
 
+## Internal config (FFat)
+
+- `data/config.yaml` is built into the internal flash FATFS partition (`ffat` in `partitions/partitions_16MB_3MBapp_9_9MB_fatfs.csv`).
+- After uploading the filesystem image, the firmware reads `robot_name` from `/config.yaml` at boot and prints it to Serial.
+
+Upload the filesystem image:
+
+- `pio run -e esp32-s3-touch-lcd-35 -t uploadfs`
+
 ## Updating values
 
 In `src/main.cpp` the demo uses:
@@ -51,4 +60,3 @@ From the project folder:
 
 - `pio run -e esp32-s3-touch-lcd-35`
 - `pio run -e esp32-s3-touch-lcd-35 -t upload`
-
