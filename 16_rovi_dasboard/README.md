@@ -2,6 +2,8 @@
 
 Simple LVGL dashboard demo for a robot (ROVI), targeting the 3.5" 320×480 ESP32‑S3 Touch LCD.
 
+![render](./docs/render.gif)
+
 ## What you get
 
 - Grid layout (configured in `data/config.json`, default is 2×3 for 320×480)
