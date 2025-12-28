@@ -12,10 +12,10 @@
     "tiles": [
       { "id": "tile_voltage" },
       { "id": "tile_cpu" },
+      { "id": "tile_hz" },
       { "id": "tile_shutdown" },
-      { "id": "tile_restart" },
-      { "id": "tile_info" },
-      { "id": "tile_ros" }
+      { "id": "tile_hz" },
+      { "id": "tile_restart" }
     ]
   },
   "gauges": [
@@ -67,18 +67,19 @@
       "action_id": "restart"
     }
   ],
-  "text_tiles": [
+  "hz_lists": [
     {
-      "tile_id": "tile_info",
-      "title": "rovi",
-      "subtitle": "Dashboard (demo timer)",
-      "body": "Demo timer updates\\nNo live ROS data yet"
-    },
-    {
-      "tile_id": "tile_ros",
-      "title": "ROS",
-      "subtitle": "Status: demo/offline",
-      "body": "Next: subscribe topics\\nand drive gauges"
+      "id": "pipeline_hz",
+      "tile_id": "tile_hz",
+      "title": "Pipeline Hz",
+      "rows": [
+        { "id": "hz_nav", "label": "nav", "target": 20 },
+        { "id": "hz_slam", "label": "slam", "target": 30 },
+        { "id": "hz_tf", "label": "tf", "target": 50 },
+        { "id": "hz_cam", "label": "cam", "target": 15 },
+        { "id": "hz_ctrl", "label": "ctrl", "target": 60 },
+        { "id": "hz_diag", "label": "diag", "target": 1 }
+      ]
     }
   ]
 }

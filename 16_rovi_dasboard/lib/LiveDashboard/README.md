@@ -29,7 +29,7 @@ ui.tick();  // handles stale gauges and optional JSONL replay
 ## Runtime API
 
 - `bool publishGauge(const char* id, int32_t value, const char* text)`
-  - Updates a gauge by its configured `id`.
+  - Updates a configured item by its `id` (arc gauge or `hz_lists` row).
   - Returns `false` if `id` is unknown.
 - `bool ingestEventLine(char* line)`
   - Parses and applies a single JSON “event line” (same format as JSONL).
@@ -63,6 +63,7 @@ Top-level keys used by the library:
   - `rows` (uint8, required)
   - `tiles` (array, required) — must be exactly `cols * rows` items, left→right then top→bottom
     - each item: `{ "id": "tile_voltage" }`
+    - to make a tile span multiple grid cells, repeat the same `id` in each cell of a rectangular region (non-rectangular repeats are rejected)
 - `gauges` (array, optional)
   - each item (required keys): `id`, `tile_id`, `title`, `min`, `max`, `initial`, `initial_text`, `accent`
   - optional: `min_label`, `max_label`, `stale_text`, `stages`
@@ -71,9 +72,12 @@ Top-level keys used by the library:
   - each item: `tile_id`, `tile_title`, `label`, `color`, `action_id` (optional `height`)
 - `text_tiles` (array, optional)
   - each item: `tile_id`, `title`, `subtitle` (optional), `body`
+- `hz_lists` (array, optional)
+  - each item: `tile_id`, `title`, `rows`
+  - `rows` is an array (max 6) of `{ "id": "hz_nav", "label": "nav", "target": 20 }`
+  - updates come from events by `id` (use `value` as current Hz, and `text` for display, e.g. `"18/20Hz"`); the bar is computed from `value/target` and capped at 100%
 
 ## Notes
 
 - Current implementation is intentionally “strict”: invalid/missing required config keys show a CONFIG ERROR screen.
 - This library currently uses a single global instance internally (singleton-style). Multiple dashboards at once isn’t supported yet.
-

@@ -19,6 +19,10 @@ namespace live_dashboard {
 #define LIVE_DASHBOARD_MAX_BUTTONS 24
 #endif
 
+#ifndef LIVE_DASHBOARD_MAX_HZ_ROWS
+#define LIVE_DASHBOARD_MAX_HZ_ROWS 24
+#endif
+
 #ifndef LIVE_DASHBOARD_ID_MAX_LEN
 #define LIVE_DASHBOARD_ID_MAX_LEN 32
 #endif

@@ -23,6 +23,7 @@ static const lv_color_t kStaleArc = lv_color_hex(0x475569);
 static constexpr size_t kMaxStagesPerGauge = 8;
 static constexpr size_t kEventLineMaxLen = 1024;
 static constexpr size_t kMaxEventsPerLine = 5;
+static constexpr size_t kMaxHzRowsPerList = 6;
 
 struct Stage {
   int32_t threshold;
@@ -397,6 +398,10 @@ struct TileSlot {
   bool used = false;
   char id[LIVE_DASHBOARD_ID_MAX_LEN]{};
   lv_obj_t *obj = nullptr;
+  uint8_t min_col = 0;
+  uint8_t max_col = 0;
+  uint8_t min_row = 0;
+  uint8_t max_row = 0;
 };
 
 struct GaugeSlot {
@@ -412,6 +417,19 @@ struct ButtonSlot {
   char action_id[LIVE_DASHBOARD_ID_MAX_LEN]{};
   LiveDashboard::ActionCallback cb = nullptr;
   void *user = nullptr;
+};
+
+struct HzRowSlot {
+  bool used = false;
+  char id[LIVE_DASHBOARD_ID_MAX_LEN]{};
+  char label[16]{};
+  int32_t target = 0;
+  lv_obj_t *name_label = nullptr;
+  lv_obj_t *value_label = nullptr;
+  lv_obj_t *bar = nullptr;
+  uint32_t last_update_ms = 0;
+  bool has_value = false;
+  bool is_stale = true;
 };
 
 static void button_event_cb_(lv_event_t *e) {
@@ -496,6 +514,7 @@ public:
 private:
   lv_obj_t *find_tile_(const char *tile_id);
   GaugeSlot *find_gauge_(const char *gauge_id);
+  HzRowSlot *find_hz_row_(const char *row_id);
 
   bool load_and_build_(LiveDashboard &api, fs::FS &fs, const char *config_path);
   bool build_from_json_(LiveDashboard &api, JsonObject root);
@@ -527,6 +546,9 @@ private:
   GaugeSlot gauges_[LIVE_DASHBOARD_MAX_GAUGES]{};
   size_t gauge_count_ = 0;
 
+  HzRowSlot hz_rows_[LIVE_DASHBOARD_MAX_HZ_ROWS]{};
+  size_t hz_row_count_ = 0;
+
   ButtonSlot buttons_[LIVE_DASHBOARD_MAX_BUTTONS]{};
   size_t button_count_ = 0;
 
@@ -554,6 +576,7 @@ bool LiveDashboardImpl::begin(LiveDashboard &api,
   splash_duration_ms_ = 0;
   tile_count_ = 0;
   gauge_count_ = 0;
+  hz_row_count_ = 0;
   button_count_ = 0;
   grid_ = nullptr;
 
@@ -562,6 +585,9 @@ bool LiveDashboardImpl::begin(LiveDashboard &api,
   }
   for (size_t i = 0; i < LIVE_DASHBOARD_MAX_GAUGES; ++i) {
     gauges_[i] = GaugeSlot{};
+  }
+  for (size_t i = 0; i < LIVE_DASHBOARD_MAX_HZ_ROWS; ++i) {
+    hz_rows_[i] = HzRowSlot{};
   }
   for (size_t i = 0; i < LIVE_DASHBOARD_MAX_BUTTONS; ++i) {
     buttons_[i] = ButtonSlot{};
@@ -585,6 +611,23 @@ void LiveDashboardImpl::tick() {
   for (size_t i = 0; i < gauge_count_; ++i) {
     if (gauges_[i].used) {
       gauges_[i].gauge.tick(now);
+    }
+  }
+
+  for (size_t i = 0; i < hz_row_count_; ++i) {
+    HzRowSlot &row = hz_rows_[i];
+    if (!row.used || row.bar == nullptr || row.value_label == nullptr || row.name_label == nullptr) {
+      continue;
+    }
+
+    const bool stale = !row.has_value || (stale_timeout_ms_ > 0 && (now - row.last_update_ms > stale_timeout_ms_));
+    if (stale && !row.is_stale) {
+      row.is_stale = true;
+      lv_obj_set_style_text_color(row.name_label, kTextSecondary, LV_PART_MAIN);
+      lv_obj_set_style_text_color(row.value_label, kTextSecondary, LV_PART_MAIN);
+      lv_label_set_text(row.value_label, "--");
+      lv_bar_set_value(row.bar, 0, LV_ANIM_OFF);
+      lv_obj_set_style_bg_color(row.bar, kStaleArc, LV_PART_INDICATOR);
     }
   }
 
@@ -625,11 +668,37 @@ void LiveDashboardImpl::tick() {
 }
 
 bool LiveDashboardImpl::publishGauge(const char *gauge_id, int32_t value, const char *text) {
-  GaugeSlot *slot = find_gauge_(gauge_id);
-  if (slot == nullptr) {
+  if (GaugeSlot *slot = find_gauge_(gauge_id)) {
+    slot->gauge.publish(value, text, millis());
+    return true;
+  }
+
+  HzRowSlot *row = find_hz_row_(gauge_id);
+  if (row == nullptr || row->bar == nullptr || row->value_label == nullptr || row->name_label == nullptr) {
     return false;
   }
-  slot->gauge.publish(value, text, millis());
+
+  row->last_update_ms = millis();
+  row->has_value = true;
+  row->is_stale = false;
+
+  const int32_t target = row->target > 0 ? row->target : 1;
+  int32_t ratio_permille = (value * 1000) / target;
+  if (ratio_permille < 0) ratio_permille = 0;
+  if (ratio_permille > 1000) ratio_permille = 1000;
+
+  lv_color_t color = lv_palette_main(LV_PALETTE_RED);
+  if (ratio_permille >= 900) {
+    color = lv_palette_main(LV_PALETTE_GREEN);
+  } else if (ratio_permille >= 700) {
+    color = lv_palette_main(LV_PALETTE_AMBER);
+  }
+
+  lv_obj_set_style_text_color(row->name_label, kTextPrimary, LV_PART_MAIN);
+  lv_obj_set_style_text_color(row->value_label, kTextPrimary, LV_PART_MAIN);
+  lv_label_set_text(row->value_label, text);
+  lv_bar_set_value(row->bar, ratio_permille, LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(row->bar, color, LV_PART_INDICATOR);
   return true;
 }
 
@@ -680,7 +749,7 @@ bool LiveDashboardImpl::ingestEventLine(char *line) {
 
     const int32_t value = obj["value"].as<int32_t>();
     if (!publishGauge(id, value, text)) {
-      Serial.printf("EVENT: unknown gauge id: %s\n", id);
+      Serial.printf("EVENT: unknown id: %s\n", id);
       return false;
     }
 
@@ -750,6 +819,19 @@ GaugeSlot *LiveDashboardImpl::find_gauge_(const char *gauge_id) {
     if (!gauges_[i].used) continue;
     if (strncmp(gauges_[i].id, gauge_id, sizeof(gauges_[i].id)) == 0) {
       return &gauges_[i];
+    }
+  }
+  return nullptr;
+}
+
+HzRowSlot *LiveDashboardImpl::find_hz_row_(const char *row_id) {
+  if (row_id == nullptr) {
+    return nullptr;
+  }
+  for (size_t i = 0; i < hz_row_count_; ++i) {
+    if (!hz_rows_[i].used) continue;
+    if (strncmp(hz_rows_[i].id, row_id, sizeof(hz_rows_[i].id)) == 0) {
+      return &hz_rows_[i];
     }
   }
   return nullptr;
@@ -904,26 +986,98 @@ bool LiveDashboardImpl::build_from_json_(LiveDashboard &api, JsonObject root) {
   lv_obj_set_layout(grid_, LV_LAYOUT_GRID);
   lv_obj_set_grid_dsc_array(grid_, col_dsc_, row_dsc_);
 
+  const size_t cell_count = static_cast<size_t>(cols) * static_cast<size_t>(rows);
+  const char *cell_ids[LIVE_DASHBOARD_MAX_TILES]{};
+
+  size_t cell_idx = 0;
   tile_count_ = 0;
   for (JsonVariant v : tiles) {
-    if (tile_count_ >= LIVE_DASHBOARD_MAX_TILES) break;
+    if (cell_idx >= cell_count) {
+      break;
+    }
+
     JsonObject tile_cfg = v.as<JsonObject>();
     const char *tile_id = tile_cfg["id"];
     if (tile_id == nullptr) {
       show_config_error_screen_("Missing: layout.tiles[].id");
       return false;
     }
+    cell_ids[cell_idx] = tile_id;
 
-    TileSlot &slot = tiles_[tile_count_];
-    slot.used = true;
-    copy_cstr(slot.id, sizeof(slot.id), tile_id);
+    const uint8_t col = static_cast<uint8_t>(cell_idx % cols);
+    const uint8_t row = static_cast<uint8_t>(cell_idx / cols);
+
+    size_t slot_index = static_cast<size_t>(-1);
+    for (size_t i = 0; i < tile_count_; ++i) {
+      if (!tiles_[i].used) {
+        continue;
+      }
+      if (strncmp(tiles_[i].id, tile_id, sizeof(tiles_[i].id)) == 0) {
+        slot_index = i;
+        break;
+      }
+    }
+
+    if (slot_index == static_cast<size_t>(-1)) {
+      if (tile_count_ >= LIVE_DASHBOARD_MAX_TILES) {
+        show_config_error_screen_("Too many unique tiles (LIVE_DASHBOARD_MAX_TILES)");
+        return false;
+      }
+
+      TileSlot &slot = tiles_[tile_count_];
+      slot.used = true;
+      copy_cstr(slot.id, sizeof(slot.id), tile_id);
+      slot.obj = nullptr;
+      slot.min_col = col;
+      slot.max_col = col;
+      slot.min_row = row;
+      slot.max_row = row;
+      ++tile_count_;
+    } else {
+      TileSlot &slot = tiles_[slot_index];
+      if (col < slot.min_col) slot.min_col = col;
+      if (col > slot.max_col) slot.max_col = col;
+      if (row < slot.min_row) slot.min_row = row;
+      if (row > slot.max_row) slot.max_row = row;
+    }
+
+    ++cell_idx;
+  }
+
+  for (size_t i = 0; i < tile_count_; ++i) {
+    TileSlot &slot = tiles_[i];
+    if (!slot.used) {
+      continue;
+    }
+
+    for (uint8_t r = slot.min_row; r <= slot.max_row; ++r) {
+      for (uint8_t c = slot.min_col; c <= slot.max_col; ++c) {
+        const size_t idx = static_cast<size_t>(r) * cols + c;
+        const char *id = (idx < cell_count) ? cell_ids[idx] : nullptr;
+        if (id == nullptr || strncmp(id, slot.id, sizeof(slot.id)) != 0) {
+          show_config_error_screen_("Non-rectangular repeated tile id");
+          return false;
+        }
+      }
+    }
+  }
+
+  for (size_t i = 0; i < tile_count_; ++i) {
+    TileSlot &slot = tiles_[i];
+    if (!slot.used) {
+      continue;
+    }
+
     slot.obj = create_tile_(grid_);
-
-    const uint8_t col = static_cast<uint8_t>(tile_count_ % cols);
-    const uint8_t row = static_cast<uint8_t>(tile_count_ / cols);
-    lv_obj_set_grid_cell(slot.obj, LV_GRID_ALIGN_STRETCH, col, 1, LV_GRID_ALIGN_STRETCH, row, 1);
-
-    ++tile_count_;
+    const uint8_t col_span = static_cast<uint8_t>(slot.max_col - slot.min_col + 1);
+    const uint8_t row_span = static_cast<uint8_t>(slot.max_row - slot.min_row + 1);
+    lv_obj_set_grid_cell(slot.obj,
+                         LV_GRID_ALIGN_STRETCH,
+                         slot.min_col,
+                         col_span,
+                         LV_GRID_ALIGN_STRETCH,
+                         slot.min_row,
+                         row_span);
   }
 
   gauge_count_ = 0;
@@ -1078,6 +1232,118 @@ bool LiveDashboardImpl::build_from_json_(LiveDashboard &api, JsonObject root) {
 
       lv_obj_add_event_cb(btn, button_event_cb_, LV_EVENT_CLICKED, &slot);
       ++button_count_;
+    }
+  }
+
+  hz_row_count_ = 0;
+  JsonArray hz_lists = root["hz_lists"].as<JsonArray>();
+  if (!hz_lists.isNull()) {
+    for (JsonVariant v : hz_lists) {
+      JsonObject list = v.as<JsonObject>();
+      const char *tile_id = list["tile_id"];
+      const char *title = list["title"];
+      JsonArray rows_cfg = list["rows"].as<JsonArray>();
+      if (tile_id == nullptr || title == nullptr || rows_cfg.isNull()) {
+        show_config_error_screen_("Missing: hz_lists[]");
+        return false;
+      }
+
+      if (rows_cfg.size() > kMaxHzRowsPerList) {
+        show_config_error_screen_("Too many hz rows (max 6)");
+        return false;
+      }
+
+      lv_obj_t *tile = find_tile_(tile_id);
+      if (tile == nullptr) {
+        show_config_error_screen_("Invalid hz_lists[].tile_id");
+        return false;
+      }
+
+      lv_obj_set_layout(tile, LV_LAYOUT_FLEX);
+      lv_obj_set_flex_flow(tile, LV_FLEX_FLOW_COLUMN);
+      lv_obj_set_style_pad_gap(tile, 8, LV_PART_MAIN);
+
+      lv_obj_t *lbl_title = lv_label_create(tile);
+      lv_label_set_text(lbl_title, title);
+      lv_obj_set_style_text_color(lbl_title, kTextPrimary, LV_PART_MAIN);
+      lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_16, LV_PART_MAIN);
+
+      lv_obj_t *list_container = lv_obj_create(tile);
+      lv_obj_set_width(list_container, LV_PCT(100));
+      lv_obj_set_flex_grow(list_container, 1);
+      lv_obj_set_style_bg_opa(list_container, LV_OPA_TRANSP, LV_PART_MAIN);
+      lv_obj_set_style_border_width(list_container, 0, LV_PART_MAIN);
+      lv_obj_set_style_pad_all(list_container, 0, LV_PART_MAIN);
+      lv_obj_set_style_pad_gap(list_container, 6, LV_PART_MAIN);
+      lv_obj_clear_flag(list_container, LV_OBJ_FLAG_SCROLLABLE);
+      lv_obj_set_layout(list_container, LV_LAYOUT_FLEX);
+      lv_obj_set_flex_flow(list_container, LV_FLEX_FLOW_COLUMN);
+
+      for (JsonVariant row_v : rows_cfg) {
+        if (hz_row_count_ >= LIVE_DASHBOARD_MAX_HZ_ROWS) {
+          show_config_error_screen_("Too many hz rows (LIVE_DASHBOARD_MAX_HZ_ROWS)");
+          return false;
+        }
+
+        JsonObject row_cfg = row_v.as<JsonObject>();
+        const char *row_id = row_cfg["id"];
+        const char *label = row_cfg["label"];
+        if (!row_cfg["target"].is<int32_t>()) {
+          show_config_error_screen_("Missing/invalid: hz_lists[].rows[].target");
+          return false;
+        }
+        const int32_t target = row_cfg["target"].as<int32_t>();
+
+        if (row_id == nullptr || label == nullptr || target <= 0) {
+          show_config_error_screen_("Missing/invalid: hz_lists[].rows[]");
+          return false;
+        }
+
+        lv_obj_t *row = lv_obj_create(list_container);
+        lv_obj_set_width(row, LV_PCT(100));
+        lv_obj_set_height(row, 40);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *lbl_name = lv_label_create(row);
+        lv_label_set_text(lbl_name, label);
+        lv_obj_set_style_text_color(lbl_name, kTextSecondary, LV_PART_MAIN);
+        lv_obj_set_style_text_font(lbl_name, &lv_font_montserrat_14, LV_PART_MAIN);
+        lv_obj_align(lbl_name, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        lv_obj_t *lbl_value = lv_label_create(row);
+        lv_label_set_text(lbl_value, "--");
+        lv_obj_set_style_text_color(lbl_value, kTextSecondary, LV_PART_MAIN);
+        lv_obj_set_style_text_font(lbl_value, &lv_font_montserrat_14, LV_PART_MAIN);
+        lv_obj_align(lbl_value, LV_ALIGN_TOP_RIGHT, 0, 0);
+
+        lv_obj_t *bar = lv_bar_create(row);
+        lv_obj_set_size(bar, LV_PCT(100), 8);
+        lv_bar_set_range(bar, 0, 1000);
+        lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+        lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, 0);
+        lv_obj_set_style_bg_color(bar, kArcBg, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(bar, kStaleArc, LV_PART_INDICATOR);
+        lv_obj_set_style_radius(bar, 4, LV_PART_MAIN);
+        lv_obj_set_style_radius(bar, 4, LV_PART_INDICATOR);
+        lv_obj_set_style_border_width(bar, 0, LV_PART_MAIN);
+
+        HzRowSlot &slot = hz_rows_[hz_row_count_];
+        slot.used = true;
+        copy_cstr(slot.id, sizeof(slot.id), row_id);
+        copy_cstr(slot.label, sizeof(slot.label), label);
+        slot.target = target;
+        slot.name_label = lbl_name;
+        slot.value_label = lbl_value;
+        slot.bar = bar;
+        slot.last_update_ms = 0;
+        slot.has_value = false;
+        slot.is_stale = true;
+
+        ++hz_row_count_;
+      }
     }
   }
 

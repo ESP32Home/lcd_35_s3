@@ -7,9 +7,9 @@ Simple LVGL dashboard demo for a robot (ROVI), targeting the 3.5" 320×480 ESP32
 - Grid layout (configured in `data/config.json`, default is 2×3 for 320×480)
   - Voltage arc gauge (multi‑stage coloring)
   - CPU arc gauge
+  - Pipeline Hz list (spans 2 tiles via repeated tile id)
   - Shutdown / Restart buttons (serial callbacks)
-  - 2 text tiles (static placeholders)
-- Fail‑safe display: if a gauge value is older than `ui.stale_timeout_ms` it shows `--`
+- Fail‑safe display: if a value is older than `ui.stale_timeout_ms` it shows `--`
 - Splash screen (PNG) loaded from internal flash FS (FFat) before showing the dashboard
 
 ## Local library
