@@ -4,6 +4,7 @@
 
 #include <FS.h>
 #include <lvgl.h>
+#include <SD_MMC.h>
 
 namespace ws_lcd_35_s3_hal {
 

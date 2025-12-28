@@ -17,12 +17,13 @@
 #include "TouchDrvFT6X36.hpp"
 
 #include "esp_heap_caps.h"
+#include "soc/soc_memory_types.h"
 
-#ifndef WS_LVGL_DRAW_BUF_USE_PSRAM
-#define WS_LVGL_DRAW_BUF_USE_PSRAM 0
-#endif
 #ifndef ROVI_ENABLE_SCREENSHOTS
 #define ROVI_ENABLE_SCREENSHOTS 0
+#endif
+#ifndef ROVI_BENCH_DRAW_BUF
+#define ROVI_BENCH_DRAW_BUF 0
 #endif
 
 static constexpr bool kScreenshotsEnabled = (ROVI_ENABLE_SCREENSHOTS != 0);
@@ -51,9 +52,7 @@ static constexpr int kSdClk = 11;
 static constexpr int kSdCmd = 10;
 static constexpr int kSdD0 = 9;
 
-// Draw buffer placement:
-// - Default: internal RAM (DMA-capable) for faster SPI transfers.
-// - To force PSRAM for experimentation, build with -DWS_LVGL_DRAW_BUF_USE_PSRAM=1
+// Draw buffer placement: internal RAM (DMA-capable) for faster SPI transfers.
 
 struct ArduinoFsFile {
   fs::File file;
@@ -70,6 +69,47 @@ lv_color_t *g_disp_draw_buf1 = nullptr;
 lv_color_t *g_disp_draw_buf2 = nullptr;
 lv_disp_drv_t g_disp_drv;
 lv_indev_drv_t g_indev_drv;
+
+static void bench_draw_buffers_(uint16_t screen_width, uint16_t screen_height) {
+#if ROVI_BENCH_DRAW_BUF
+  const uint16_t w = screen_width;
+  const uint16_t h = 120; // avoid huge internal allocs
+  const uint32_t pixels = static_cast<uint32_t>(w) * h;
+  const uint32_t bytes = pixels * sizeof(uint16_t);
+  const int loops = 5;
+
+  auto bench = [&](const char *label, uint32_t caps) {
+    void *buf = heap_caps_malloc(bytes, caps);
+    if (!buf) {
+      Serial.printf("BENCH %s: alloc failed\n", label);
+      return;
+    }
+    memset(buf, 0xA5, bytes);
+    uint32_t start = micros();
+    for (int i = 0; i < loops; ++i) {
+      g_gfx.draw16bitRGBBitmap(0, 0, static_cast<uint16_t *>(buf), w, h);
+    }
+    uint32_t elapsed = micros() - start;
+    float per = elapsed / static_cast<float>(loops);
+    float mbps = (bytes / 1e6f) / (per / 1e6f);
+    Serial.printf("BENCH %s: %d frames of %ux%u took %.1f ms total (%.2f ms/frame, %.2f MB/s)\n",
+                  label,
+                  loops,
+                  w,
+                  h,
+                  elapsed / 1000.0f,
+                  per / 1000.0f,
+                  mbps);
+    heap_caps_free(buf);
+  };
+
+  bench("INTERNAL|DMA", MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+  bench("SPIRAM", MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+  (void)screen_width;
+  (void)screen_height;
+#endif
+}
 
 void lcd_reset() {
   g_tca.write1(1, 1);
@@ -258,9 +298,7 @@ bool WsLcd35S3Hal::begin() {
 
   const uint32_t buf_pixels = static_cast<uint32_t>(screen_width_) * 120U;
   const uint32_t buf_bytes = buf_pixels * sizeof(lv_color_t);
-  const uint32_t caps = (WS_LVGL_DRAW_BUF_USE_PSRAM != 0)
-                            ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-                            : (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+  const uint32_t caps = (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
 
   g_disp_draw_buf1 = static_cast<lv_color_t *>(heap_caps_malloc(buf_bytes, caps));
   g_disp_draw_buf2 = static_cast<lv_color_t *>(heap_caps_malloc(buf_bytes, caps));
@@ -268,6 +306,17 @@ bool WsLcd35S3Hal::begin() {
     Serial.println("FATAL: LVGL draw buffers alloc failed");
     return false;
   }
+  auto log_buf = [](const char *label, void *ptr) {
+    Serial.printf("DRAW_BUF %s=%p ext=%d internal=%d dma=%d\n",
+                  label,
+                  ptr,
+                  ptr != nullptr ? (esp_ptr_external_ram(ptr) ? 1 : 0) : 0,
+                  ptr != nullptr ? (esp_ptr_internal(ptr) ? 1 : 0) : 0,
+                  ptr != nullptr ? (esp_ptr_dma_capable(ptr) ? 1 : 0) : 0);
+  };
+  log_buf("buf1", g_disp_draw_buf1);
+  log_buf("buf2", g_disp_draw_buf2);
+  Serial.printf("DRAW_BUF caps: %s\n", (caps & MALLOC_CAP_SPIRAM) ? "SPIRAM" : "INTERNAL|DMA");
   lv_disp_draw_buf_init(&g_draw_buf, g_disp_draw_buf1, g_disp_draw_buf2, buf_pixels);
 
   lv_disp_drv_init(&g_disp_drv);
@@ -289,6 +338,8 @@ bool WsLcd35S3Hal::begin() {
   } else {
     Serial.println("WARN: FFat not mounted (no LVGL flash FS)");
   }
+
+  bench_draw_buffers_(screen_width_, screen_height_);
 
   return true;
 }

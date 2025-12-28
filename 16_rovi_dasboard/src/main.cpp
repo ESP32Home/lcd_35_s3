@@ -3,8 +3,6 @@
 
 #include <Arduino.h>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include "esp32-hal-psram.h"
@@ -13,63 +11,19 @@
 #endif
 
 #include <LiveDashboard.h>
+#include <ScreenshotController.h>
 #include <WsLcd35S3Hal.h>
 
 #ifndef ROVI_ENABLE_JSONL_DEMO_REPLAY
 #define ROVI_ENABLE_JSONL_DEMO_REPLAY 0
 #endif
-#ifndef ROVI_ENABLE_SCREENSHOTS
-#define ROVI_ENABLE_SCREENSHOTS 0
-#endif
-
-static constexpr bool kCaptureEnabled = (ROVI_ENABLE_SCREENSHOTS != 0 && ROVI_ENABLE_JSONL_DEMO_REPLAY != 0);
 
 static constexpr const char *kConfigPath = "/config.json";
 
 static ws_lcd_35_s3_hal::WsLcd35S3Hal g_hal;
 static live_dashboard::LiveDashboard g_dashboard;
+static screenshot::ScreenshotController g_shots(g_hal, g_dashboard);
 static bool g_dashboard_ready = false;
-static bool g_capture_active = false;
-static uint32_t g_capture_target_cycle = 0;
-static uint32_t g_capture_counter = 0;
-static uint32_t g_last_demo_frame = 0;
-static char g_capture_dir[64]{};
-static bool g_capture_listed = false;
-
-static bool choose_next_capture_dir() {
-  if (!g_hal.sdFs().exists("/screenshots")) {
-    g_hal.sdFs().mkdir("/screenshots");
-  }
-
-  uint32_t max_run = 0;
-  File dir = g_hal.sdFs().open("/screenshots");
-  if (dir && dir.isDirectory()) {
-    File f = dir.openNextFile();
-    while (f) {
-      if (f.isDirectory()) {
-        const char *name = f.name();
-        if (name != nullptr && strncmp(name, "/screenshots/run_", 17) == 0) {
-          const char *num = name + 17;
-          char *end = nullptr;
-          unsigned long val = strtoul(num, &end, 10);
-          if (end != num && val > max_run) {
-            max_run = static_cast<uint32_t>(val);
-          }
-        }
-      }
-      f = dir.openNextFile();
-    }
-  }
-
-  const uint32_t next_run = max_run + 1;
-  snprintf(g_capture_dir, sizeof(g_capture_dir), "/screenshots/run_%u", static_cast<unsigned>(next_run));
-  if (!g_hal.sdFs().mkdir(g_capture_dir)) {
-    Serial.printf("WARN: mkdir %s failed (screenshots disabled)\n", g_capture_dir);
-    g_capture_dir[0] = '\0';
-    return false;
-  }
-  return true;
-}
 
 static void touch_allocation(void *ptr, size_t size) {
   if (ptr == nullptr || size == 0) {
@@ -206,71 +160,6 @@ static void poll_event_lines_from_serial() {
   }
 }
 
-static void list_capture_dir() {
-#if ROVI_ENABLE_SCREENSHOTS
-  if (!g_capture_dir[0]) return;
-  if (!g_hal.sdFsMounted()) return;
-
-  File dir = g_hal.sdFs().open(g_capture_dir);
-  if (!dir || !dir.isDirectory()) {
-    Serial.printf("Capture dir not found: %s\n", g_capture_dir);
-    return;
-  }
-
-  Serial.printf("Captured files in %s:\n", g_capture_dir);
-  File f = dir.openNextFile();
-  while (f) {
-    if (!f.isDirectory()) {
-      Serial.printf(" - %s (%u bytes)\n", f.name(), static_cast<unsigned>(f.size()));
-    }
-    f = dir.openNextFile();
-  }
-#endif
-}
-
-static void maybe_capture_demo_frame() {
-#if ROVI_ENABLE_SCREENSHOTS
-  if (!g_capture_active) {
-    return;
-  }
-  if (!g_dashboard.demoReplayActive()) {
-    return;
-  }
-
-  const uint32_t cycle = g_dashboard.demoCycle();
-  if (cycle > g_capture_target_cycle) {
-    g_capture_active = false; // first cycle finished
-    if (!g_capture_listed) {
-      list_capture_dir();
-      g_capture_listed = true;
-    }
-    return;
-  }
-  if (cycle < g_capture_target_cycle) {
-    return;
-  }
-
-  const uint32_t frame = g_dashboard.demoFrameIndex();
-  if (frame == 0 || frame == g_last_demo_frame) {
-    return;
-  }
-  g_last_demo_frame = frame;
-
-  ++g_capture_counter;
-  char path[96];
-  snprintf(path, sizeof(path), "%s/%u.bmp", g_capture_dir, static_cast<unsigned>(g_capture_counter));
-  const bool ok = g_hal.captureScreenshotBmp(path);
-  if (!ok) {
-    Serial.printf("Screenshot failed: %s\n", path);
-    g_capture_active = false;
-    if (!g_capture_listed) {
-      list_capture_dir();
-      g_capture_listed = true;
-    }
-  }
-#endif
-}
-
 void setup() {
   Serial.begin(115200);
   Serial.println("ROVI dashboard (config-driven) example");
@@ -309,20 +198,7 @@ void setup() {
 
   Serial.println("Setup done");
 
-#if ROVI_ENABLE_SCREENSHOTS
-  if (kCaptureEnabled && g_hal.sdFsMounted()) {
-    if (choose_next_capture_dir()) {
-      g_capture_active = true;
-      g_capture_target_cycle = g_dashboard.demoCycle();
-      g_capture_counter = 0;
-      g_last_demo_frame = 0;
-      g_capture_listed = false;
-      Serial.printf("Screenshots enabled: %s\n", g_capture_dir);
-    }
-  } else {
-    Serial.println("Screenshots disabled (flag off or SD missing)");
-  }
-#endif
+  g_shots.begin();
 }
 
 void loop() {
@@ -332,7 +208,7 @@ void loop() {
   }
 
   g_dashboard.tick();
-  maybe_capture_demo_frame();
+  g_shots.tick();
   poll_event_lines_from_serial();
 
   g_hal.loop();
