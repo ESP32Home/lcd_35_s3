@@ -4,41 +4,35 @@ Simple LVGL dashboard demo for a robot (ROVI), targeting the 3.5" 320×480 ESP32
 
 ## What you get
 
-- 2×3 fixed tile layout (matches the 320×480 display)
+- Grid layout (configured in `data/config.json`, default is 2×3 for 320×480)
   - Voltage arc gauge (multi‑stage coloring)
   - CPU arc gauge
-  - Shutdown / Restart buttons (demo messagebox)
-  - 2 info tiles (static text placeholders)
-- Fail‑safe display: if a gauge value is older than `stale_timeout_ms` it shows `--`
-- Optional SD splash screen (PNG) before showing the dashboard
+  - Shutdown / Restart buttons (serial callbacks)
+  - 2 text tiles (static placeholders)
+- Fail‑safe display: if a gauge value is older than `ui.stale_timeout_ms` it shows `--`
+- Splash screen (PNG) loaded from internal flash FS (FFat) before showing the dashboard
 
 ## Local library
 
-This sample refactors the UI into a local PlatformIO library:
+This sample uses two local PlatformIO libraries:
 
-- `lib/LiveDashboard/` (rovi‑neutral)
-  - `live_dashboard::ArcGaugeTile` (arc gauge + stale handling + optional stage colors)
-  - `live_dashboard::LiveDashboard` (builds the 2×3 dashboard layout)
-  - `live_dashboard::ShowSplashFromLvglPath(...)` (loads and shows an image via LVGL FS)
+- `lib/WsLcd35S3Hal/` (board/HAL)
+  - Brings up Arduino_GFX + touch + LVGL display/input
+  - Mounts internal FFat and registers it as LVGL drive `F:`
+- `lib/LiveDashboard/` (UI)
+  - Loads `/config.json` from internal FFat
+  - Builds the tile grid + widgets from config
+  - Shows splash from internal FFat (e.g. `F:/rovi.png`)
 
-The rovi‑specific parts stay in `src/main.cpp`:
+`src/main.cpp` stays minimal:
 
-- Battery voltage stage thresholds + colors (`kBatteryVoltageStages`)
-- Splash image path (`kSplashLvglPath`) and duration
-- Demo timer that publishes dummy Voltage/CPU values
-
-## Splash screen (SD card)
-
-1. Copy `data/rovi.png` to the SD card root as `rovi.png`.
-2. Insert SD card and boot.
-3. The code tries to load `S:rovi.png` for ~3 seconds; if SD isn’t mounted or the file can’t be decoded it prints a message and continues.
-
-Nothing needs to be “flashed” for the splash image when loading from SD: it’s read at runtime from the card.
+- Registers callbacks for `shutdown` / `restart`
+- Publishes dummy Voltage/CPU values on a timer (to show colors + stale state)
 
 ## Internal config (FFat)
 
-- `data/config.json` is built into the internal flash FATFS partition (`ffat` in `partitions/partitions_16MB_3MBapp_9_9MB_fatfs.csv`).
-- `/config.json` is required: if it’s missing or invalid the firmware prints a fatal message and shows an empty “CONFIG ERROR” screen.
+- `data/config.json` and `data/rovi.png` are built into the internal flash FATFS partition (`ffat` in `partitions/partitions_16MB_3MBapp_9_9MB_fatfs.csv`).
+- `/config.json` is required: if it’s missing or invalid the firmware prints a fatal message and shows a “CONFIG ERROR” screen.
 
 Upload the filesystem image:
 
@@ -48,11 +42,9 @@ Upload the filesystem image:
 
 In `src/main.cpp` the demo uses:
 
-- `g_dashboard.publishVoltage(voltage_x10, "12.1V")`
-- `g_dashboard.publishCpu(cpu_percent, "37%")`
+- `g_dashboard.publishGauge("voltage", voltage_x10, "12.1V")`
+- `g_dashboard.publishGauge("cpu", cpu_percent, "37%")`
 - `g_dashboard.tick()` (called from `loop()` to enforce stale/`--` behavior)
-
-To change multi‑stage thresholds/colors, edit `kBatteryVoltageStages` in `src/main.cpp`.
 
 ## Build (PlatformIO)
 

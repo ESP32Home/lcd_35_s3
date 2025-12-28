@@ -1,8 +1,7 @@
 {
   "name": "LiveDashboard",
   "version": "0.1.0",
-  "description": "LVGL dashboard widgets (2x3 tile layout, gauges, splash helper).",
+  "description": "Config-driven LVGL dashboard (grid tiles, gauges, buttons, splash).",
   "frameworks": "arduino",
   "platforms": "espressif32"
 }
-

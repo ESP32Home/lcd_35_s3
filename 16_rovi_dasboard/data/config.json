@@ -3,15 +3,33 @@
   "ui": {
     "dark_theme": true,
     "stale_timeout_ms": 5000,
-    "splash": { "path": "S:rovi.png", "duration_ms": 3000 }
+    "background": "#0B1220",
+    "splash": { "path": "/rovi.png", "duration_ms": 3000 }
   },
-  "gauges": {
-    "voltage": {
-      "min_x10": 90,
-      "max_x10": 130,
-      "initial_x10": 121,
+  "layout": {
+    "cols": 2,
+    "rows": 3,
+    "tiles": [
+      { "id": "tile_voltage" },
+      { "id": "tile_cpu" },
+      { "id": "tile_shutdown" },
+      { "id": "tile_restart" },
+      { "id": "tile_info" },
+      { "id": "tile_ros" }
+    ]
+  },
+  "gauges": [
+    {
+      "id": "voltage",
+      "tile_id": "tile_voltage",
+      "title": "Voltage",
+      "min": 90,
+      "max": 130,
+      "initial": 121,
+      "initial_text": "12.1V",
       "min_label": "9V",
       "max_label": "13V",
+      "accent": "green",
       "stages": [
         { "t": 126, "c": "green" },
         { "t": 111, "c": "green" },
@@ -20,14 +38,47 @@
         { "t": 90, "c": "red" }
       ]
     },
-    "cpu": {
+    {
+      "id": "cpu",
+      "tile_id": "tile_cpu",
+      "title": "CPU",
       "min": 0,
       "max": 100,
       "initial": 37,
+      "initial_text": "37%",
       "min_label": "0%",
       "max_label": "100%",
       "accent": "amber"
     }
-  }
+  ],
+  "buttons": [
+    {
+      "tile_id": "tile_shutdown",
+      "tile_title": "Power",
+      "label": "Shutdown",
+      "color": "red",
+      "action_id": "shutdown"
+    },
+    {
+      "tile_id": "tile_restart",
+      "tile_title": "System",
+      "label": "Restart",
+      "color": "blue",
+      "action_id": "restart"
+    }
+  ],
+  "text_tiles": [
+    {
+      "tile_id": "tile_info",
+      "title": "rovi",
+      "subtitle": "Dashboard (demo timer)",
+      "body": "Demo timer updates\\nNo live ROS data yet"
+    },
+    {
+      "tile_id": "tile_ros",
+      "title": "ROS",
+      "subtitle": "Status: demo/offline",
+      "body": "Next: subscribe topics\\nand drive gauges"
+    }
+  ]
 }
-
