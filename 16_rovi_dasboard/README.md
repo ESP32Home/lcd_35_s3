@@ -27,7 +27,8 @@ This sample uses two local PlatformIO libraries:
 `src/main.cpp` stays minimal:
 
 - Registers callbacks for `shutdown` / `restart`
-- Publishes dummy Voltage/CPU values on a timer (to show colors + stale state)
+- Optional JSONL demo replay (from `data/test.jsonl`) enabled via init options
+- Serial event ingestion (one JSON line per `\n`)
 
 ## Internal config (FFat)
 
@@ -50,14 +51,16 @@ In `src/main.cpp` the demo uses:
 
 The sample includes a simple “event replay” demo:
 
-- `data/test.jsonl` is uploaded to internal FFat and replayed once per second (loops at EOF).
-- You can also paste the same JSON lines into the serial monitor; the line is applied when a full newline is received.
-- Disable it by setting `ROVI_ENABLE_DEMO` to `0` in `src/main.cpp`.
+- `data/test.jsonl` is uploaded to internal FFat and can be replayed once per second (loops at EOF).
+- You can paste the same JSON lines into the serial monitor; the line is applied when a full newline is received.
+- Toggle JSONL replay via `ROVI_ENABLE_JSONL_DEMO_REPLAY` in `src/main.cpp`.
+- If JSONL replay is enabled and `/test.jsonl` is missing, the app fails hard and shows an error screen.
 
 Line format:
 
 - Single update: `{"id":"voltage","value":121,"text":"12.1V"}`
 - Multiple updates in one line: `[{"id":"voltage","value":121,"text":"12.1V"},{"id":"cpu","value":37,"text":"37%"}]`
+- Limits: max line length 1024 chars, max 5 events per line.
 
 ## Build (PlatformIO)
 

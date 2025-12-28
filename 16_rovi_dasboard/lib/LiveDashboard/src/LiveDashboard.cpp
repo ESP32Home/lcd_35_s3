@@ -21,6 +21,8 @@ static const lv_color_t kArcBg = lv_color_hex(0x334155);
 static const lv_color_t kStaleArc = lv_color_hex(0x475569);
 
 static constexpr size_t kMaxStagesPerGauge = 8;
+static constexpr size_t kEventLineMaxLen = 1024;
+static constexpr size_t kMaxEventsPerLine = 5;
 
 struct Stage {
   int32_t threshold;
@@ -425,14 +427,69 @@ static void button_event_cb_(lv_event_t *e) {
   slot->cb(slot->action_id, slot->user);
 }
 
+static bool read_line_(File &f, char *out, size_t out_size, bool *out_truncated) {
+  if (out == nullptr || out_size == 0) {
+    return false;
+  }
+  out[0] = '\0';
+
+  if (out_truncated != nullptr) {
+    *out_truncated = false;
+  }
+
+  if (!f) {
+    return false;
+  }
+
+  size_t idx = 0;
+  bool got_any = false;
+  while (f.available()) {
+    int c = f.read();
+    if (c < 0) {
+      break;
+    }
+    got_any = true;
+    if (c == '\n') {
+      break;
+    }
+    if (c == '\r') {
+      continue;
+    }
+    if (idx + 1 < out_size) {
+      out[idx++] = static_cast<char>(c);
+    } else {
+      if (out_truncated != nullptr) {
+        *out_truncated = true;
+      }
+      while (f.available()) {
+        int d = f.read();
+        if (d < 0 || d == '\n') {
+          break;
+        }
+      }
+      break;
+    }
+  }
+
+  out[idx] = '\0';
+  return got_any;
+}
+
 } // namespace
 
 class LiveDashboardImpl {
 public:
-  bool begin(LiveDashboard &api, fs::FS &fs, const char *config_path, uint16_t screen_width, uint16_t screen_height, char lvgl_drive_letter);
+  bool begin(LiveDashboard &api,
+             fs::FS &fs,
+             const char *config_path,
+             uint16_t screen_width,
+             uint16_t screen_height,
+             char lvgl_drive_letter,
+             const LiveDashboardOptions &options);
   void tick();
 
   bool publishGauge(const char *gauge_id, int32_t value, const char *text);
+  bool ingestEventLine(char *line);
   bool onAction(const char *action_id, LiveDashboard::ActionCallback cb, void *user);
   const char *robotName() const { return robot_name_; }
 
@@ -447,6 +504,8 @@ private:
   uint16_t screen_height_ = 0;
   char lvgl_drive_letter_ = 'F';
 
+  fs::FS *fs_ = nullptr;
+
   uint32_t stale_timeout_ms_ = 5000;
   lv_color_t background_color_ = lv_color_hex(0x0B1220);
   bool dark_theme_ = true;
@@ -454,6 +513,13 @@ private:
   char robot_name_[32]{};
   char splash_path_[64]{};
   uint32_t splash_duration_ms_ = 0;
+
+  bool demo_replay_ = false;
+  char demo_path_[64]{};
+  uint32_t demo_period_ms_ = 1000;
+  uint32_t demo_last_ms_ = 0;
+  File demo_file_{};
+  char demo_line_[kEventLineMaxLen + 1]{};
 
   TileSlot tiles_[LIVE_DASHBOARD_MAX_TILES]{};
   size_t tile_count_ = 0;
@@ -476,10 +542,12 @@ bool LiveDashboardImpl::begin(LiveDashboard &api,
                               const char *config_path,
                               uint16_t screen_width,
                               uint16_t screen_height,
-                              char lvgl_drive_letter) {
+                              char lvgl_drive_letter,
+                              const LiveDashboardOptions &options) {
   screen_width_ = screen_width;
   screen_height_ = screen_height;
   lvgl_drive_letter_ = lvgl_drive_letter;
+  fs_ = &fs;
 
   robot_name_[0] = '\0';
   splash_path_[0] = '\0';
@@ -499,6 +567,16 @@ bool LiveDashboardImpl::begin(LiveDashboard &api,
     buttons_[i] = ButtonSlot{};
   }
 
+  demo_replay_ = options.demo_replay;
+  copy_cstr(demo_path_, sizeof(demo_path_), options.demo_path);
+  demo_period_ms_ = options.demo_period_ms;
+  demo_last_ms_ = millis();
+  if (demo_file_) {
+    demo_file_.close();
+  }
+  demo_file_ = File();
+  demo_line_[0] = '\0';
+
   return load_and_build_(api, fs, config_path);
 }
 
@@ -509,6 +587,41 @@ void LiveDashboardImpl::tick() {
       gauges_[i].gauge.tick(now);
     }
   }
+
+  if (!demo_replay_ || !demo_file_ || demo_period_ms_ == 0) {
+    return;
+  }
+
+  if (now - demo_last_ms_ < demo_period_ms_) {
+    return;
+  }
+  demo_last_ms_ = now;
+
+  for (int attempts = 0; attempts < 8; ++attempts) {
+    bool truncated = false;
+    if (!read_line_(demo_file_, demo_line_, sizeof(demo_line_), &truncated)) {
+      demo_file_.seek(0);
+      if (!read_line_(demo_file_, demo_line_, sizeof(demo_line_), &truncated)) {
+        return;
+      }
+    }
+
+    if (truncated) {
+      Serial.printf("DEMO: line too long (max %u)\n", static_cast<unsigned>(kEventLineMaxLen));
+      continue;
+    }
+
+    char *line = demo_line_;
+    while (*line == ' ' || *line == '\t' || *line == '\r' || *line == '\n') {
+      ++line;
+    }
+    if (*line == '\0') {
+      continue;
+    }
+
+    ingestEventLine(line);
+    break;
+  }
 }
 
 bool LiveDashboardImpl::publishGauge(const char *gauge_id, int32_t value, const char *text) {
@@ -518,6 +631,93 @@ bool LiveDashboardImpl::publishGauge(const char *gauge_id, int32_t value, const 
   }
   slot->gauge.publish(value, text, millis());
   return true;
+}
+
+bool LiveDashboardImpl::ingestEventLine(char *line) {
+  if (line == nullptr) {
+    Serial.println("EVENT: line is null");
+    return false;
+  }
+
+  while (*line == ' ' || *line == '\t' || *line == '\r' || *line == '\n') {
+    ++line;
+  }
+  if (*line == '\0') {
+    return false;
+  }
+
+  const size_t len = strlen(line);
+  if (len > kEventLineMaxLen) {
+    Serial.printf("EVENT: line too long (%u > %u)\n", static_cast<unsigned>(len), static_cast<unsigned>(kEventLineMaxLen));
+    return false;
+  }
+
+  static StaticJsonDocument<2048> doc;
+  doc.clear();
+  DeserializationError err = deserializeJson(doc, line);
+  if (err) {
+    Serial.printf("EVENT: JSON parse error: %s\n", err.c_str());
+    return false;
+  }
+
+  auto apply_one = [&](JsonObject obj) -> bool {
+    if (obj.isNull()) {
+      Serial.println("EVENT: item is not an object");
+      return false;
+    }
+
+    const char *id = obj["id"];
+    const char *text = obj["text"];
+    if (id == nullptr || text == nullptr) {
+      Serial.println("EVENT: missing id/text");
+      return false;
+    }
+
+    if (!obj["value"].is<int32_t>()) {
+      Serial.println("EVENT: missing/invalid value");
+      return false;
+    }
+
+    const int32_t value = obj["value"].as<int32_t>();
+    if (!publishGauge(id, value, text)) {
+      Serial.printf("EVENT: unknown gauge id: %s\n", id);
+      return false;
+    }
+
+    return true;
+  };
+
+  JsonVariant root = doc.as<JsonVariant>();
+  size_t applied = 0;
+
+  if (root.is<JsonArray>()) {
+    JsonArray arr = root.as<JsonArray>();
+    if (arr.size() > kMaxEventsPerLine) {
+      Serial.printf("EVENT: too many items (%u > %u)\n",
+                    static_cast<unsigned>(arr.size()),
+                    static_cast<unsigned>(kMaxEventsPerLine));
+      return false;
+    }
+
+    for (JsonVariant v : arr) {
+      if (!v.is<JsonObject>()) {
+        Serial.println("EVENT: array item is not an object");
+        return false;
+      }
+      if (apply_one(v.as<JsonObject>())) {
+        ++applied;
+      }
+    }
+  } else if (root.is<JsonObject>()) {
+    if (apply_one(root.as<JsonObject>())) {
+      applied = 1;
+    }
+  } else {
+    Serial.println("EVENT: root must be object or array");
+    return false;
+  }
+
+  return applied > 0;
 }
 
 bool LiveDashboardImpl::onAction(const char *action_id, LiveDashboard::ActionCallback cb, void *user) {
@@ -642,6 +842,34 @@ bool LiveDashboardImpl::build_from_json_(LiveDashboard &api, JsonObject root) {
                                            dark_theme_,
                                            LV_FONT_DEFAULT);
   lv_disp_set_theme(lv_disp_get_default(), theme);
+
+  if (demo_replay_) {
+    if (demo_path_[0] == '\0') {
+      show_config_error_screen_("Missing demo_path");
+      return false;
+    }
+    if (fs_ == nullptr) {
+      show_config_error_screen_("Internal FS not available");
+      return false;
+    }
+
+    char open_path[sizeof(demo_path_) + 1]{};
+    if (demo_path_[0] != '/') {
+      snprintf(open_path, sizeof(open_path), "/%s", demo_path_);
+    } else {
+      copy_cstr(open_path, sizeof(open_path), demo_path_);
+    }
+
+    if (demo_file_) {
+      demo_file_.close();
+    }
+    demo_file_ = fs_->open(open_path, "r");
+    if (!demo_file_) {
+      Serial.printf("FATAL: demo file not found: %s\n", open_path);
+      show_config_error_screen_("Demo file not found (uploadfs)");
+      return false;
+    }
+  }
 
   if (splash_path_[0] != '\0' && splash_duration_ms_ > 0) {
     char lvgl_path[96];
@@ -897,13 +1125,20 @@ bool LiveDashboardImpl::build_from_json_(LiveDashboard &api, JsonObject root) {
   return true;
 }
 
-bool LiveDashboard::begin(fs::FS &fs, const char *config_path, uint16_t screen_width, uint16_t screen_height, char lvgl_drive_letter) {
-  return g_impl.begin(*this, fs, config_path, screen_width, screen_height, lvgl_drive_letter);
+bool LiveDashboard::begin(fs::FS &fs,
+                          const char *config_path,
+                          uint16_t screen_width,
+                          uint16_t screen_height,
+                          char lvgl_drive_letter,
+                          const LiveDashboardOptions &options) {
+  return g_impl.begin(*this, fs, config_path, screen_width, screen_height, lvgl_drive_letter, options);
 }
 
 void LiveDashboard::tick() { g_impl.tick(); }
 
 bool LiveDashboard::publishGauge(const char *gauge_id, int32_t value, const char *text) { return g_impl.publishGauge(gauge_id, value, text); }
+
+bool LiveDashboard::ingestEventLine(char *line) { return g_impl.ingestEventLine(line); }
 
 bool LiveDashboard::onAction(const char *action_id, ActionCallback cb, void *user) { return g_impl.onAction(action_id, cb, user); }
 
