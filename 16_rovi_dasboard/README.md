@@ -38,7 +38,7 @@ Nothing needs to be “flashed” for the splash image when loading from SD: it�
 ## Internal config (FFat)
 
 - `data/config.json` is built into the internal flash FATFS partition (`ffat` in `partitions/partitions_16MB_3MBapp_9_9MB_fatfs.csv`).
-- After uploading the filesystem image, the firmware reads `/config.json` at boot (ArduinoJson) and applies values like `robot_name`, stale timeout, gauge ranges, and battery stages.
+- `/config.json` is required: if it’s missing or invalid the firmware prints a fatal message and shows an empty “CONFIG ERROR” screen.
 
 Upload the filesystem image:
 
